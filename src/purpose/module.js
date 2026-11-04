@@ -78,7 +78,7 @@ export function cleanReply(raw) {
   return s
 }
 
-export function createPurpose({ getConfig, setConfig, hub, log, isMuted, mood, memory, personaText, pet: petOf }) {
+export function createPurpose({ getConfig, setConfig, hub, log, isMuted, mood, memory, learning, personaText, pet: petOf }) {
   const moodOf = () => { try { return mood?.() || null } catch { return null } }
   const memoryOf = () => { try { return memory?.() || null } catch { return null } }
   const chatIdOf = (cfg) => `private:${cfg.ownerQQ}`
@@ -121,7 +121,7 @@ export function createPurpose({ getConfig, setConfig, hub, log, isMuted, mood, m
           lastSeenAt: m.lastHit || m.at,
           createdAt: m.at,
           pinned: false, anchor: false, isInitial: false,
-        }))
+        })).concat(learning?.()?.materials?.() || [])
     } catch {
       return []
     }

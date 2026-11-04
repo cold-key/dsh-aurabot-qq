@@ -126,6 +126,22 @@ test('自己写的模块加载了；同名的替换了内置的；关掉的内�
   assert.equal((await fake.call('/ext/echo/hi')).json().hi, '你好')
 })
 
+test('浏览学习内置模块通过真实模块路由注册，默认兼容且工具只在结构化模式出现', async () => {
+  assert.equal((await mod('social-learning')).running, 'builtin')
+  const status = (await fake.call('/learning/status')).json()
+  assert.equal(status.ok, true); assert.equal(status.config.mode, 'legacy')
+  assert.equal((await fake.call('/learning/records')).json().items.length, 0)
+  const learning = api.modules.use('social-learning')
+  assert.equal(typeof learning.observe, 'function')
+  const old = api.getConfig()
+  api.setConfig({ ...old, ext: { ...old.ext, 'social-learning': { ...old.ext['social-learning'], mode: 'structured' } } })
+  const tools = api.modules.buildTools({ chat: { kind: 'private', chatId: 'private:' + OWNER }, sessionId: 'test', level: 'act' })
+  assert.ok(tools.some((t) => t.name === 'recall_web_knowledge'))
+  const denial = await api.modules.handle('/aurabot/api/learning/delete', { method: 'GET', headers: {} })
+  assert.equal(denial.ok, false)
+  api.setConfig(old)
+})
+
 test('模块接管消息、改写回复、加命令；她的规则里有模块补的话，没有关掉模块的本事', async () => {
   mock.push(priv('ping'))
   await until(() => sentTo(OWNER).includes('pong'))

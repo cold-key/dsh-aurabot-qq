@@ -6,6 +6,19 @@ const { askModel, modelReasoning, pickReasoningEffort, clearReasoningCache } = a
 
 const CFG = { model: { provider: 'p', model: 'm' } }
 
+test('明确限制一次调用时不因思考强度不支持而重试；取消信号传给宿主', async () => {
+  clearReasoningCache()
+  const controller = new AbortController()
+  const { dsh, calls } = fakeDsh({ reasoning: { efforts: ['low'], defaultEffort: 'low' }, stream: async function* () { throw new Error('model does not support reasoning effort "low"') } })
+  await assert.rejects(askModel(dsh, { cfg: CFG, text: '学习', maxAttempts: 1, signal: controller.signal }))
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].reasoningEffort, 'low')
+  assert.equal(calls[0].signal, controller.signal)
+  controller.abort()
+  await assert.rejects(askModel(dsh, { cfg: CFG, text: '取消的任务', signal: controller.signal }), { name: 'AbortError' })
+  assert.equal(calls.length, 1)
+})
+
 /**
  * reasoning: undefined = 适配器报错（查不到）；null = 没有推理元数据；{efforts, default} = 支持
  */

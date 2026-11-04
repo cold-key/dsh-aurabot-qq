@@ -220,6 +220,7 @@ api.on('reply/items', (items) => [...items, { kind: 'text', value: '—— 大�
 | `config` | `新配置, 旧配置` | 配置改了 |
 | `module/start` / `module/stop` | 模块 id | 有模块启动 / 停下 |
 | `song/sung` | `{ title, chatId }` | 翻唱模块唱完一首 |
+| `browse/observed` | `{ platform, origin, items }` | 浏览完成后通知学习模块，只入队、不等待模型；目前校验 B 站与抖音来源，格式见下文 |
 | 你自己 `api.emit` 的 | 随你 | 模块之间互相通知 |
 
 `msg` 长这样（`text` 是纯文字：@ 她的那段去掉了，@ 别人的写成「@昵称」，图片 / 表情 / 文件写成「[图片]」这类占位；引用的那条消息的文字**不在**里面，要的话用 `replyId` 去 `api.onebot('get_msg', { message_id })` 拿）：
@@ -318,11 +319,37 @@ return function Panel({ settings, save, toast }) {
 | `qzone-social` | 空间互动 | `run({ force })` `state()` |
 | `speakup` | 主动搭话 | `fire(原因)` `state()` |
 | `bili` | B 站 | `watch(链接)` `comment(链接, 文字)` `run()` `checkReplies()` `account()` `state()` |
+| `social-learning` | 浏览学习 | `observe(batch)` `modeFor(platform)` `recall(query, opts?)` `prompt(query, opts?)` `interests()` `rank(items, textOf)` `materials()` `status()`；模块关闭时 `api.use` 返回 null |
 | `douyin` | 刷抖音 | `run` `browse` `watch` `likeVideo` `commentVideo` `confirmOwner` `account` `loginStep` `showWindow` `state`；工具 `douyin_watch` / `douyin_browse` / `douyin_like` / `douyin_comment` |
 | `song` | 翻唱 | `request({ song, pitch, chatId })` `search(关键词)` `status()` `install()` |
 
 聊天中枢需要的时候会去找 `stickers`（发表情、偷表情）、`voice`（发语音）、`mood`（心情影响表情 / 语音频率）、`memory`（群聊插话判断）。
 这几个被关掉，对应的事就不做（想发语音时改发文字）；被替换，就用你的——所以替换时**导出的函数名要和上表一样**。
+
+### 已读内容与浏览学习
+
+`social-learning` 是可单独关闭的内置模块，默认 `ext['social-learning'].mode = 'legacy'`。结构化模式为 `structured`，`off` 只记录平台浏览经历。关闭来源开关或整个模块时，该平台恢复原来的简短记忆；已有简单记忆不会迁移、改写或删除。
+
+平台读完后发送一次批次，不要把搜索结果、尚未打开的推荐或模型自行补出的内容当已读材料：
+
+```js
+api.emit('browse/observed', {
+  platform: 'bili', origin: 'watch',
+  items: [{ id: 'BV1GJ411x7h7', title: '视频标题', author: 'UP主',
+    publishedAt: 1700000000000,
+    sections: [{ kind: 'subtitle', text: '实际读到的字幕原文' },
+      { kind: 'comments', text: '网友：实际读到的热评' }],
+  }],
+})
+```
+
+`sections.kind` 支持 `title/description/subtitle/comments/vision/summary/chapters`。时间戳为毫秒，来源网址由程序从平台和真实 ID 构造。模型证据必须引用实际输入的连续摘录；评论与标题不能单独成为知识事实的证据。不能把 `evidenceStatus: corroborated` 理解为事实已核实，它仅表示不同内容来源都提及。
+
+`recall(query, { markUsed: false })` 默认只查询本地，`prompt(query, { markUsed: false })` 可给后台浏览附加材料。只有有效的 active 记录参与，最多 3 条、约 800 字、最多一个表达。普通聊天的 `prompt` 钩子已自动接入，无需重复添加。`markUsed: true` 记录提供次数（试运行不写），不延长有效期。系统会话不自动注入，`recall_web_knowledge` 是无网络、无额外模型调用的本地只读工具。
+
+学习队列在两平台和模块热重载之间串行共享，每个批次最多一次额外提炼。`api.ask` 新增可选 `{ maxAttempts: 1, signal }`：前者禁止思考强度不兼容引起的自动重试，后者向宿主传递尽力取消信号。默认调用方式保持原来的兼容重试。配置切换或卸载会使旧结果失效；若适配器忽略取消，新学习请求会等待旧物理请求退出。
+
+管理页面位于「人设 → 浏览学习」，接口为 `/aurabot/api/learning/*`，修改类接口要求 POST JSON。完整字段、时效和验证说明见仓库 [docs/SOCIAL-LEARNING.md](../../docs/SOCIAL-LEARNING.md)。
 
 ## 替换内置模块
 

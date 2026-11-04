@@ -7,6 +7,7 @@ import { isSilence } from '../chat/reply.js'
 import { permOf } from '../chat/access.js'
 import { createBrowser } from './browser.js'
 import { createSite, findAwemeId, resolveShort, digestOf, videoLink } from './site.js'
+import { douyinObservation } from '../social-learning/observations.js'
 
 const dayKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 const between = (lo, hi) => Math.floor(lo + Math.random() * (Math.max(lo, hi) - lo + 1))
@@ -34,7 +35,7 @@ const emptyState = () => ({
   dmSeen: [], dmInit: false, lastDmCheck: 0, // 主人抖音私信：看过的消息 id；第一次看时旧消息只记下不回
 })
 
-export function createDouyin({ getConfig, setOwner, hub, memory, log, site: injected, now = Date.now, wait } = {}) {
+export function createDouyin({ getConfig, setOwner, hub, memory, log, site: injected, now = Date.now, wait, learning = () => null, onObserved = () => {} } = {}) {
   const cfg = () => getConfig().douyin
   const sleep = wait || ((ms) => new Promise((r) => setTimeout(r, ms)))
   const site = injected || createSite({ browser: createBrowser({ profileDir: dataDir('douyin', 'edge-profile'), browserPath: () => cfg().browserPath, log }), log })
@@ -146,6 +147,8 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
   }
 
   async function think(prompt) {
+    const background = learning()?.modeFor('douyin') === 'structured' ? learning().prompt(prompt, { markUsed: false }) : ''
+    if (background) prompt += '\n\n' + background
     const out = await hub.runSystemTurn('douyin', 'QQ · 刷抖音', `【刷抖音，不是聊天，这一轮不会发到聊天里】\n${prompt}`, { timeoutMs: 180000 })
     return typeof out === 'string' ? out : String(out?.text ?? out ?? '')
   }
@@ -229,7 +232,8 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
     for (let i = 0; i < 4 && out.length < want; i++) {
       const page = await site.feed(s.refreshIndex)
       s.refreshIndex = (s.refreshIndex % 50) + 1
-      for (const v of page) if (!seen.has(v.awemeId) && !out.some((x) => x.awemeId === v.awemeId) && out.length < want) out.push(v)
+      const ranked = learning()?.modeFor('douyin') === 'structured' ? learning().rank(page, (v) => [v.title, v.category, ...(v.tags || [])].join(' ')) : page
+      for (const v of ranked) if (!seen.has(v.awemeId) && !out.some((x) => x.awemeId === v.awemeId) && out.length < want) out.push(v)
     }
     return out
   }
@@ -269,6 +273,7 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
         save(s)
       }
       if (!looked.length) { s.lastSkipReason = '视频都没打开'; return { ok: false, message: s.lastSkipReason } }
+      onObserved(douyinObservation(looked))
 
       const canWrite = !paused(s)
       const g = getConfig()
@@ -303,7 +308,7 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
         const meta = { awemeId: v.awemeId, title: v.title, author: v.author }
         const feeling = clip(d.feeling, 80)
         memory?.addEvent?.({ text: `在抖音看了${v.author ? ' ' + v.author + ' 的' : ''}《${v.title}》${feeling ? '：' + feeling : ''}`, tags: ['抖音'], importance: 0.4 })
-        if (d.remember && !isSilence(d.remember)) memory?.add?.({ text: clip(d.remember, 200), tags: ['抖音'], importance: 0.5, source: 'event' })
+        if ((!learning() || learning().modeFor('douyin') === 'legacy') && d.remember && !isSilence(d.remember)) memory?.add?.({ text: clip(d.remember, 200), tags: ['抖音'], importance: 0.5, source: 'event' })
         record(s, { kind: 'watch', ...meta, text: feeling })
 
         if (d.like === true && liked < likeLeft) {
@@ -404,6 +409,7 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
       const r = await ready(s)
       if (!r.ok) return r
       const [v, comments] = await Promise.all([site.detail(id), site.comments(id).catch(() => [])])
+      onObserved(douyinObservation([{ v, comments }], 'watch'))
       memory?.addEvent?.({ text: `看了别人发来的抖音视频《${v.title}》`, tags: ['抖音'], importance: 0.4 })
       record(s, { kind: 'look', awemeId: id, title: v.title, author: v.author })
       return { ok: true, message: digestOf(v, comments), awemeId: id, title: v.title }

@@ -516,6 +516,7 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
       { id: 'speakup', label: '主动搭话', flag: 'speakUp.enabled' },
       { id: 'pet', label: '桌宠' },
       { id: 'mood', label: '心情与记忆', flag: 'mood.enabled' },
+      { id: 'learning', label: '浏览学习' },
       { id: 'song', label: '翻唱', flag: 'song.enabled' },
       { id: 'bili', label: 'B站', flag: 'bili.enabled' },
       { id: 'douyin', label: '抖音', flag: 'douyin.enabled' },
@@ -525,14 +526,14 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
       { id: 'logs', label: '日志' },
     ]
     // 内置标签页属于哪个模块：模块都没在跑就不显示这一页
-    const TAB_MODS = { voice: ['voice'], stickers: ['stickers'], imagegen: ['imagegen'], diary: ['diary', 'qzone-social'], speakup: ['speakup', 'purpose'], pet: ['pet'], mood: ['mood', 'memory'], song: ['song'], bili: ['bili'], douyin: ['douyin'], heybox: ['heybox'] }
+    const TAB_MODS = { learning: ['social-learning'], voice: ['voice'], stickers: ['stickers'], imagegen: ['imagegen'], diary: ['diary', 'qzone-social'], speakup: ['speakup', 'purpose'], pet: ['pet'], mood: ['mood', 'memory'], song: ['song'], bili: ['bili'], douyin: ['douyin'], heybox: ['heybox'] }
     const modOn = (st, id) => (st.modules || []).some((m) => m.id === id && m.running)
 
     // 两层导航：上面一排是分组，下面一排是这组里的页面；每组记住上次看的那页，Alt+K 查找功能
     // （分组导航的思路来自社区贡献的「导航布局」扩展，这里改成面板自己实现）
     const NAV_GROUPS = [
       { id: 'home', label: '概览', icon: 'M3 10.5 12 3l9 7.5M5.5 9v11.5h13V9M10 20.5v-6h4v6', tabs: ['overview'] },
-      { id: 'self', label: '人设', icon: 'M12 12.5a4.25 4.25 0 1 0 0-8.5 4.25 4.25 0 0 0 0 8.5zM4.5 20.5c.9-3.6 3.9-5.5 7.5-5.5s6.6 1.9 7.5 5.5', tabs: ['persona', 'group', 'speakup', 'mood'] },
+      { id: 'self', label: '人设', icon: 'M12 12.5a4.25 4.25 0 1 0 0-8.5 4.25 4.25 0 0 0 0 8.5zM4.5 20.5c.9-3.6 3.9-5.5 7.5-5.5s6.6 1.9 7.5 5.5', tabs: ['persona', 'group', 'speakup', 'mood', 'learning'] },
       { id: 'express', label: '表达', icon: 'M20.5 11.5a8 8 0 0 1-11.7 7.1L4 20l1.4-4.4A8 8 0 1 1 20.5 11.5zM9 13.2s1.1 1.5 3 1.5 3-1.5 3-1.5M9.5 9.6h.01M14.5 9.6h.01', tabs: ['voice', 'stickers', 'imagegen', 'song', 'pet'] },
       { id: 'platform', label: '平台', icon: 'M3.5 6.5h17v11h-17zM10.5 9.8v4.4l3.8-2.2z', tabs: ['diary', 'bili', 'douyin', 'heybox'] },
       { id: 'system', label: '系统', icon: 'M4 7h9M17 7h3M4 12h3M11 12h9M4 17h11M19 17h1M15 5v4M9 10v4M17 15v4', tabs: ['connect', 'model', 'access', 'local', 'modules', 'logs'] },
@@ -543,6 +544,7 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
     const navOrder = (g, t) => { const i = g.tabs.indexOf(t.id); return i >= 0 ? i : g.tabs.length - (g.tabs.includes('logs') ? 1.5 : 0) }
     const NAV_ALIAS = {
       overview: '首页 状态', connect: 'qq 网关 snowluma onebot 登录 工作区', persona: '人设 性格 设定 头像', access: '主人 白名单 权限 群管 改资料',
+      learning: '学习 知识 热梗 表达 兴趣 浏览 来源',
       group: '群聊 插话 合并', model: 'ai 大模型 视觉 思考强度', voice: '语音 tts 说话 音色 edge', stickers: '表情 小黄脸 gif 商城表情',
       imagegen: '画图 图片', diary: '空间 说说 日记', speakup: '搭话 主动', mood: '心情 记忆', song: '唱歌 翻唱 rvc 点歌',
       bili: 'b站 bilibili 视频', douyin: '抖音 短视频 私信', pet: '桌宠 宠物 悬浮窗 气泡 electron', local: '本地 接口 sd sovits', modules: '扩展 模块 插件', logs: '日志 报错',
@@ -3283,6 +3285,96 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
             } }, '完成，让大肥鱼上线')))
     }
 
+    // 浏览学习使用独立知识库，记录操作立即生效，配置沿用面板的统一保存。
+    function LearningRecord({ record, act }) {
+      const [editing, setEditing] = useState(false)
+      const [value, setValue] = useState(record)
+      const labels = { active: '可用', candidate: '待观察', rejected: '已拒绝', outdated: '已过期' }
+      return h(Card, { title: record.title, desc: `${record.kind === 'meme' ? '表达' : '知识'} · ${labels[record.displayStatus] || record.displayStatus} · ${record.ownerEdited ? '主人已校订' : '模型把握 ' + Math.round(record.confidence * 100) + '%（不代表事实核验）'}${record.pinned ? ' · 已固定' : ''}` },
+        editing ? h('div', null,
+          ...['title', 'text', ...(record.kind === 'meme' ? ['usage', 'example', 'avoid'] : [])].map((key) => h(Row, { key, label: { title: '名称', text: '内容', usage: '适用情境', example: '例句', avoid: '避免情境' }[key] },
+            h('textarea', { className: 'ab-textarea', value: value[key] || '', onChange: (e) => setValue({ ...value, [key]: e.target.value }) }))),
+          h(Btn, { onClick: async () => { if (await act('/learning/edit', { ...value, status: 'active' })) setEditing(false) } }, '保存校订并设为可用'),
+          h(Btn, { kind: 'ghost', onClick: () => setEditing(false) }, '取消')) : h('div', null,
+          h('p', { style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' } }, record.text),
+          record.kind === 'meme' ? h('p', { className: 'ab-muted' }, `情境：${record.usage || '待补充'}；例句：${record.example || '待补充'}；避免：${record.avoid || '无关时不要硬用'}`) : null,
+          h('div', { className: 'ab-flex', style: { flexWrap: 'wrap' } },
+            h(Btn, { small: true, onClick: () => { setValue(record); setEditing(true) } }, '校订'),
+            h(Btn, { small: true, onClick: () => act('/learning/edit', { id: record.id, pinned: !record.pinned }) }, record.pinned ? '取消固定' : '固定'),
+            h(Btn, { small: true, onClick: () => act('/learning/edit', { id: record.id, status: record.status === 'rejected' ? 'active' : 'rejected' }) }, record.status === 'rejected' ? '恢复可用' : '拒绝'),
+            h(Btn, { small: true, kind: 'danger', onClick: () => act('/learning/delete', { id: record.id }) }, '删除并屏蔽重学'))),
+        h('details', null, h('summary', null, `来源与摘录（${record.evidence.length}） · ${record.evidenceStatus === 'corroborated' ? '多个内容提及，仍需甄别' : '单来源，未核实'}`),
+          ...record.evidence.map((e, i) => h('p', { key: i, style: { overflowWrap: 'anywhere' } },
+            h('a', { href: e.url, target: '_blank', rel: 'noopener noreferrer' }, e.title || e.sourceId),
+            ` · ${new Date(e.observedAt).toLocaleString()}：${e.quote}`))),
+        h('small', { className: 'ab-muted' }, `到期：${new Date(record.expiresAt).toLocaleDateString()}${record.pinned ? '（固定期间保留）' : ''} · 提供给聊天 ${record.uses} 次；召回不会延长有效期`))
+    }
+
+    function Learning({ draft, setDraft, toast }) {
+      const f = useField(draft, setDraft)
+      const p = 'ext.social-learning.'
+      const [status, setStatus] = useState(null)
+      const [items, setItems] = useState([])
+      const [query, setQuery] = useState('')
+      const [kind, setKind] = useState('')
+      const [filter, setFilter] = useState('')
+      const [preview, setPreview] = useState(null)
+      const [recall, setRecall] = useState(null)
+      const [error, setError] = useState('')
+      const requestId = useRef(0)
+      const refresh = useCallback(async () => {
+        const id = ++requestId.current
+        try {
+          const [s, r] = await Promise.all([get('/learning/status'), get('/learning/records?' + new URLSearchParams({ query, kind, status: filter }))])
+          if (id !== requestId.current) return
+          if (!s.ok || !r.ok) throw new Error(s.message || r.message || '学习模块没有运行')
+          setStatus(s); setItems(r.items); setError('')
+        } catch (e) { if (id === requestId.current) setError(e.message || '读取失败') }
+      }, [query, kind, filter])
+      useEffect(() => { refresh(); const t = setInterval(refresh, 10000); return () => { requestId.current++; clearInterval(t) } }, [refresh])
+      const act = async (path, body) => {
+        try { const r = await post(path, body); toast(r.message || (r.ok ? '已完成' : '操作失败'), r.ok ? 'ok' : 'err'); await refresh(); return r.ok }
+        catch (e) { toast(e.message || '请求失败', 'err'); return false }
+      }
+      const outcomes = { learned: '已提炼', failed: '提炼失败', timeout: '等待超时', interrupted: '已中断', preview: '仅预览', budget: '额度用完' }
+      return h('div', null,
+        h(Card, { title: '浏览学习', desc: 'B 站与抖音读完后积累有来源的知识和表达，聊天时按话题取用。核心人格保持稳定。配置需点击面板底部保存；下方记录操作立即生效。' },
+          h(Row, { label: '学习方式' }, f.select(p + 'mode', [{ value: 'legacy', label: '兼容：沿用原来的简短记忆' }, { value: 'structured', label: '结构化：独立学习库' }, { value: 'off', label: '关闭学习：只记浏览经历' }])),
+          h(Row, { label: '从 B 站学习', hint: '关闭该来源时沿用其原来的记忆方式' }, f.sw(p + 'sources.bili')),
+          h(Row, { label: '从抖音学习' }, f.sw(p + 'sources.douyin')),
+          h(Row, { label: '每日额外模型调用', hint: '两平台共享额度，每轮最多一次；失败和手动预览也计入。设为 0 暂停提炼' }, f.num(p + 'dailyMax', { min: 0, max: 100 })),
+          h(Row, { label: '兴趣缓慢变化', hint: '至少 3 个内容、2 轮浏览形成倾向，每日变化不超过 0.05；主人配置优先' }, f.sw(p + 'affectInterests')),
+          h(Row, { label: '轻微影响心情', hint: '每轮最多 ±2，每日累计绝对值最多 6，沿用现有心情恢复机制' }, f.sw(p + 'affectMood')),
+          h(Row, { label: '作为目的引擎素材', hint: '交给现有主动搭话流程选择，不增加发送频率' }, f.sw(p + 'purpose')),
+          h('details', null, h('summary', null, '容量与时效'),
+            h(Row, { label: '每轮输入字符上限' }, f.num(p + 'maxInputChars', { min: 2000, max: 16000 })),
+            h(Row, { label: '记录容量', hint: '固定记录始终保留' }, f.num(p + 'maxRecords', { min: 50, max: 2000 })),
+            ...[['knowledgeDays', '知识有效天数', 365], ['memeDays', '表达有效天数', 90], ['topicalDays', '时事有效天数', 30]].map(([key, label, max]) => h(Row, { key, label }, f.num(p + key, { min: 1, max })))),
+          h('p', { className: 'ab-muted' }, '试运行期间不自动提炼；手动预览会消耗额度，但不写入学习记录、不改变兴趣或心情。关闭整个「浏览学习」模块可恢复原平台行为。')),
+        error ? h('p', { className: 'ab-note err', role: 'alert' }, error) : null,
+        status ? h(Card, { title: '运行状态', right: h(Btn, { small: true, onClick: refresh }, '刷新') },
+          h('p', null, `今日调用 ${status.quota.count}/${status.config.dailyMax} · 可用 ${status.active}/${status.count} 条 · ${status.busy ? '正在处理' : '空闲'} · 排队 ${status.queued} 轮`),
+          h('p', null, '学习兴趣：' + (status.interests.map((r) => `${r.topic} ${r.score > 0 ? '+' : ''}${r.score.toFixed(3)}`).join('、') || '还在积累')),
+          h(Btn, { small: true, onClick: () => act('/learning/reset-interests', {}) }, '重置学习兴趣'),
+          h('details', null, h('summary', null, '最近处理记录'), ...status.history.map((r, i) => h('p', { key: i }, `${new Date(r.at).toLocaleString()} · ${outcomes[r.outcome] || r.outcome} · ${r.message}`))),
+          h('details', null, h('summary', null, '用最近浏览材料预览提炼（消耗一次额度）'),
+            status.batches.length ? status.batches.map((b) => h('div', { key: b.id, className: 'ab-row' }, h('span', null, `${b.platform === 'bili' ? 'B站' : '抖音'}：${b.titles.join('、')}`),
+              h(Btn, { small: true, onClick: async () => {
+                try { const r = await post('/learning/preview', { batchId: b.id }); setPreview(r); await refresh() } catch (e) { toast(e.message, 'err') }
+              } }, '预览，不应用'))) : h('p', null, '请先在已启用的平台浏览一次。兼容模式和试运行的材料只保留到重启。')),
+          preview ? h('div', { role: 'status' }, preview.ok ? h('div', null, h('b', null, '预览完成，以下结果未应用'), ...preview.result.records.map((r, i) => h('p', { key: i }, `${r.title}：${r.text}`)), h('p', null, `兴趣候选：${preview.result.interests.map((r) => r.topic).join('、') || '无'}；心情候选 ${preview.result.moodDelta}`)) : h('p', null, preview.message)) : null) : null,
+        h(Card, { title: '知识与表达', desc: '候选和过期内容不会进入聊天。固定可延长保留；删除与拒绝会阻止相同内容自动重学。最多显示 200 条。' },
+          h(Row, { label: '搜索' }, h('input', { className: 'ab-input', value: query, onChange: (e) => setQuery(e.target.value), placeholder: '名称、内容或标签' })),
+          h(Row, { label: '类型' }, h(Select, { value: kind, onChange: setKind, options: [{ value: '', label: '全部' }, { value: 'knowledge', label: '知识' }, { value: 'meme', label: '表达' }] })),
+          h(Row, { label: '状态' }, h(Select, { value: filter, onChange: setFilter, options: [{ value: '', label: '全部' }, { value: 'active', label: '可用' }, { value: 'candidate', label: '待观察' }, { value: 'rejected', label: '已拒绝' }, { value: 'outdated', label: '已过期' }] })),
+          h(Btn, { onClick: async () => {
+            try { const r = await post('/learning/recall', { query }); setRecall(r.items || []) } catch (e) { toast(e.message, 'err') }
+          } }, '预览聊天召回（不调用模型）'),
+          recall ? h('p', { role: 'status' }, recall.length ? '当前会提供：' + recall.map((r) => r.title).join('、') : '没有相关且仍有效的内容') : null),
+        ...items.map((r) => h(LearningRecord, { key: r.id, record: r, act })),
+        items.length ? null : h(Empty, { text: '暂无符合条件的学习记录' }))
+    }
+
     // ---------------- 面板主体 ----------------
     function AurabotPage() {
       useStyle()
@@ -3373,12 +3465,13 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
       const curTab = tabs.find((t) => t.id === tab) || tabs[0]
       const body = curTab.ext ? ExtPage : {
         overview: Overview, connect: Connect, persona: Persona, access: Access, group: Group, model: Model, voice: Voice,
-        stickers: Stickers, imagegen: ImageGen, diary: Diary, speakup: SpeakUp, pet: PetPanel, mood: Mood, song: Song, bili: Bili, douyin: Douyin, heybox: Heybox, local: LocalApi, modules: Modules, logs: Logs,
+        stickers: Stickers, imagegen: ImageGen, diary: Diary, speakup: SpeakUp, pet: PetPanel, mood: Mood, learning: Learning, song: Song, bili: Bili, douyin: Douyin, heybox: Heybox, local: LocalApi, modules: Modules, logs: Logs,
       }[curTab.id] || Overview
       // 哪些标签有没保存的改动
       const TAB_KEYS = { connect: ['snowluma', 'botQQ'], access: ['ownerQQ', 'ownerName', 'ownerLevel', 'longTasks', 'profilePerms', 'allow'], group: ['group', 'merge', 'titleFilter'], model: ['model', 'chatModels'], voice: ['voice'], stickers: ['stickers'], imagegen: ['imageGen'], diary: ['diary', 'qzoneSocial'], speakup: ['speakUp'], pet: [], mood: ['mood', 'memory'], song: ['song'], bili: ['bili'], douyin: ['douyin'], heybox: ['heybox'], local: ['local'] }
       const tabDirty = (id) => {
         if (!dirty) return false
+        if (id === 'learning') return JSON.stringify(draft.ext?.['social-learning']) !== JSON.stringify(cfg.ext?.['social-learning'])
         if (id.startsWith('ext:')) { const k = id.slice(4); return JSON.stringify((draft.ext || {})[k]) !== JSON.stringify((cfg.ext || {})[k]) }
         return (TAB_KEYS[id] || []).some((k) => JSON.stringify(draft[k]) !== JSON.stringify(cfg[k]))
       }

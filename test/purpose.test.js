@@ -69,6 +69,7 @@ function makePurpose(hub, overrides = {}) {
     mood: () => ({ nudge: (d, r) => nudges.push({ d, r }) }),
     memory: () => ({ list: () => (overrides.memories ?? DEFAULT_MEMORIES).map((m) => ({ id: m.id || 'm1', text: m.text, importance: m.importance ?? 0.8, at: Date.now() })) }),
     personaText: () => overrides.persona || '',
+    learning: overrides.learning,
   })
   return { p, cfg, nudges }
 }
@@ -318,6 +319,14 @@ test('清洗：去掉备忘段、引号和「大肥鱼：」前缀', () => {
 })
 
 // ---------- 素材适配（记忆 importance 0~1 → 0~100） ----------
+
+test('学习知识接入原目的引擎素材，关闭来源后不再进入提示词', () => {
+  let enabled = true
+  const { p } = makePurpose(makeHub(), { memories: [], learning: () => ({ materials: () => enabled ? [{ id: 'web-test', text: '猫咪饮水护理（单来源，未核实）', importance: 60, createdAt: Date.now(), lastSeenAt: Date.now() }] : [] }) })
+  assert.match(p.preview().prompt, /猫咪饮水护理/)
+  enabled = false
+  assert.doesNotMatch(p.preview().prompt, /猫咪饮水护理/)
+})
 
 test('记忆适配：aurabot 0~1 重要度 ×100 后能过引擎阈值，成为素材', async () => {
   const hub = makeHub({ reply: () => `想起「星穹列车」了，主人玩过吗` })

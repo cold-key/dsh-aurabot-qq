@@ -9,10 +9,10 @@ import { avatarSource } from '../profile/index.js'
 export default {
   id: 'bili',
   name: 'B站',
-  version: '1.1.0',
+  version: '1.2.0',
   description: '看别人发的 B 站视频；定时自己刷、评论、回评论；抽帧看画面、发截图；按权限改自己的头像 / 签名（bili_watch / bili_comment / qq_send_shot / bili_set_avatar / bili_set_sign）',
   tab: 'bili',
-  files: ['bili/duty.js', 'bili/api.js', 'bili/vision.js', 'bili/shots.js'],
+  files: ['bili/duty.js', 'bili/api.js', 'bili/vision.js', 'bili/shots.js', 'social-learning/observations.js'],
   setup(api) {
     const { hub } = api.core
     const lastImage = new Map() // chatId → 最近一张图的网址（给 bili_set_avatar 的 last 用）
@@ -21,7 +21,8 @@ export default {
       if (url && /^https?:\/\//i.test(url)) lastImage.set(msg.chatId, url)
       return false
     })
-    const bili = createBili({ getConfig: api.config, hub, memory: api.lazy('memory'), log: api.log, dsh: api.dsh })
+    const bili = createBili({ getConfig: api.config, hub, memory: api.lazy('memory'), log: api.log, dsh: api.dsh,
+      learning: () => api.use('social-learning'), onObserved: (batch) => api.emit('browse/observed', batch) })
     api.every(60_000, () => bili.tick(), '刷B站')
 
     // 看视频谁发的链接都能看，评论要主人开口

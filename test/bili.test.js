@@ -72,7 +72,7 @@ test('过滤：播放量、发布时间、看过的', () => {
   assert.deepEqual(duty.filterVideos(list, { minViews: 5000, maxAgeDays: 60, seen: new Set(['d']), now }).map((v) => v.bvid), ['c'])
 })
 
-function fakes({ decisions, replyText = '是呀 我也觉得', cfgOver = {}, postError = null } = {}) {
+function fakes({ decisions, replyText = '是呀 我也觉得', cfgOver = {}, postError = null, learning, onObserved } = {}) {
   const posted = []
   const sent = []
   const events = []
@@ -107,7 +107,7 @@ function fakes({ decisions, replyText = '是呀 我也觉得', cfgOver = {}, pos
     add: (m) => facts.push(m.text),
   }
   const cfg = normalize({ enabled: true, dryRun: false, ownerQQ: '10000001', bili: { enabled: true, cookie: 'SESSDATA=x; bili_jct=y', perRun: 2, maxCommentsPerDay: 1, ...cfgOver } })
-  const b = duty.createBili({ getConfig: () => cfg, hub, memory, log: { info() {}, warn() {}, debug() {} }, api: fakeApi })
+  const b = duty.createBili({ getConfig: () => cfg, hub, memory, log: { info() {}, warn() {}, debug() {} }, api: fakeApi, learning, onObserved })
   return { b, posted, sent, events, facts }
 }
 
@@ -131,6 +131,24 @@ test('刷一轮：看视频、按每天上限评论、分享给主人、记成�
   // 看过的不会再看
   const r2 = await b.run({ force: true })
   assert.equal(r2.ok, false)
+})
+
+test('学习接入：一轮一次已读批次，结构化与关闭模式不重复写旧知识，单链接也可观察', async () => {
+  const { rmSync } = await import('node:fs')
+  const { dataDir } = await import('../src/core/store.js')
+  for (const mode of ['structured', 'off', 'legacy']) {
+    rmSync(dataDir('bili.json'), { force: true })
+    const batches = []
+    const { b, events, facts } = fakes({ decisions: [{ i: 1, feeling: '好看', remember: '猫咪会开门' }],
+      learning: () => ({ modeFor: () => mode, interests: () => [], prompt: () => '' }), onObserved: (x) => batches.push(x) })
+    await b.run({ force: true })
+    assert.equal(batches.length, 1); assert.equal(batches[0].items.length, 2)
+    assert.ok(batches[0].items[0].sections.some((s) => s.kind === 'subtitle' && s.text.includes('今天做饭')))
+    assert.ok(events.some((s) => s.includes('在B站看了')))
+    assert.equal(facts.length, mode === 'legacy' ? 1 : 0)
+    await b.watch('BV1aaaaaaaaa')
+    assert.equal(batches.length, 2); assert.equal(batches[1].origin, 'watch')
+  }
 })
 
 test('回复别人：带上楼层、按格式回，回过的不再回', async () => {

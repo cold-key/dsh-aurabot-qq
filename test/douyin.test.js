@@ -144,7 +144,7 @@ function fakeSite({ feed = [], loggedIn = true, verify = '', likeError = null, c
 }
 
 let n = 0
-function setup({ decisions = [], cfgOver = {}, douyinOver = {}, siteOpts = {}, now, onWait = () => {}, owner, turn } = {}) {
+function setup({ decisions = [], cfgOver = {}, douyinOver = {}, siteOpts = {}, now, onWait = () => {}, owner, turn, learning, onObserved } = {}) {
   process.env.AURABOT_DATA_DIR = mkdtempSync(join(tmpdir(), 'aurabot-douyin-' + n++ + '-'))
   const sent = []
   const events = []
@@ -160,7 +160,7 @@ function setup({ decisions = [], cfgOver = {}, douyinOver = {}, siteOpts = {}, n
   const fs = fakeSite({ feed: [aweme('7000000000000000001'), aweme('7000000000000000002', { is_ads: true }), aweme('7000000000000000003'), aweme('7000000000000000004')], ...siteOpts })
   const waits = []
   const owners = []
-  const dy = duty.createDouyin({ getConfig: () => cfg, setOwner: (o) => { owners.push(o); cfg.douyin.owner = o }, hub, memory, log: { info() {}, warn() {}, debug() {} }, site: fs, wait: async (ms) => { waits.push(ms); onWait(ms) }, ...(now ? { now } : {}) })
+  const dy = duty.createDouyin({ getConfig: () => cfg, setOwner: (o) => { owners.push(o); cfg.douyin.owner = o }, hub, memory, log: { info() {}, warn() {}, debug() {} }, site: fs, wait: async (ms) => { waits.push(ms); onWait(ms) }, ...(now ? { now } : {}), learning, onObserved })
   return { dy, fs, hub, sent, events, prompts, cfg, waits, owners, pushed }
 }
 
@@ -192,6 +192,19 @@ test('刷一轮：一个个点开看，按视频 id 点赞 / 评论（不会点�
   const again = await dy.run({ force: true })
   assert.equal(again.ok, false)
   assert.match(again.message, /没刷到新视频/)
+})
+
+test('学习接入：只重排已有推荐，不增加请求；批次含已看内容并抑制旧知识，单链接也接入', async () => {
+  const batches = []
+  const { dy, fs, events } = setup({ decisions: [{ i: 1, feeling: '不错', remember: '有只猫' }], douyinOver: { perRun: 1 },
+    learning: () => ({ modeFor: () => 'structured', rank: (page) => [...page].reverse(), prompt: () => '' }), onObserved: (x) => batches.push(x) })
+  await dy.run({ force: true })
+  assert.equal(fs.calls.feed, 1); assert.deepEqual(fs.calls.watch, ['7000000000000000004'])
+  assert.equal(batches.length, 1); assert.equal(batches[0].items.length, 1)
+  assert.equal(batches[0].items[0].id, fs.calls.watch[0])
+  assert.ok(events.some((s) => s.includes('在抖音看了'))); assert.ok(!events.some((s) => s.startsWith('记住:')))
+  await dy.watch('7000000000000000001')
+  assert.equal(batches.length, 2); assert.equal(batches[1].origin, 'watch')
 })
 
 test('刷一轮：试运行不真点、不占次数；已经赞过的不算次数', async () => {

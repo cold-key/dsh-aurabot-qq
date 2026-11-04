@@ -1185,6 +1185,9 @@ test('慢工具卡住超过 1.5 秒先发一条「正在做」提示，不让主
   }
   const t = await until(async () => { const x = await turn(); return x.reply === '慢工具好了' ? x : null }, 25000)
   assert.equal(t.reply, '慢工具好了')
+  // 模型轮次完成后，回复仍需异步投递；等模拟网关收到再检查发送顺序。
+  await until(() => mock.calls.slice(before).some((c) => c.action === 'send_private_msg' &&
+    (c.params.message || []).some((s) => s.type === 'text' && /慢工具好了/.test(s.data.text))), 8000)
   const sent = mock.calls.slice(before).filter((c) => c.action === 'send_private_msg').map((c) => c.params.message)
   const texts = sent.map((m) => (m || []).filter((s) => s.type === 'text').map((s) => s.data.text).join(''))
   const noticeAt = texts.findIndex((x) => /还在忙/.test(x))

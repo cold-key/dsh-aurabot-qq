@@ -5,6 +5,7 @@ import { dataDir, readJson, writeJson } from '../core/store.js'
 import { createBiliApi, findVideoId, parseCookie } from './api.js'
 import { lookWithVision, visionState } from './vision.js'
 import { createShotStore, shotPath, clockOf } from './shots.js'
+import { biliObservation, withLearnedKeyword } from '../social-learning/observations.js'
 
 // 这些错误说明今天别再发了：没登录 / Cookie 过期、csrf 不对、风控、要验证码、太频繁
 const PAUSE_CODES = { '-101': 'B 站没登录或 Cookie 过期了', '-111': 'Cookie 里的 bili_jct 不对', '-352': '被 B 站风控了', '-509': '发得太频繁', '12015': 'B 站要求验证码' }
@@ -39,7 +40,7 @@ export function digestOf(v, { subtitle = '', comments = [], vision = '' } = {}) 
   ].filter(Boolean).join('\n')
 }
 
-export function createBili({ getConfig, hub, memory, log, dsh, api: injected, vision: see = lookWithVision }) {
+export function createBili({ getConfig, hub, memory, log, dsh, api: injected, vision: see = lookWithVision, learning = () => null, onObserved = () => {} }) {
   const cfg = () => getConfig().bili
   const api = injected || createBiliApi({ getCookie: () => cfg().cookie, log })
   const shots = createShotStore({ max: () => getConfig().bili.shotLibrary })
@@ -73,6 +74,8 @@ export function createBili({ getConfig, hub, memory, log, dsh, api: injected, vi
   }
 
   async function think(prompt) {
+    const background = learning()?.modeFor('bili') === 'structured' ? learning().prompt(prompt, { markUsed: false }) : ''
+    if (background) prompt += '\n\n' + background
     return hub.runSystemTurn('bili', 'QQ · 刷B站', `【刷 B 站，不是聊天，这一轮不会发到聊天里】\n${prompt}`, { timeoutMs: 180000 })
   }
 
@@ -85,11 +88,11 @@ export function createBili({ getConfig, hub, memory, log, dsh, api: injected, vi
     try {
       const out = await think(`你想去 B 站刷点视频。你感兴趣的：${interests.join('、') || '随便看看'}。\n你记得的关于${owner()}和大家的事：\n${about.map((t) => '- ' + t).join('\n') || '（暂无）'}\n最近刷过的：\n${recent.map((t) => '- ' + t).join('\n') || '（暂无）'}\n\n挑 3 个这次想搜的关键词（可以是你自己想看的，也可以是${owner()}可能喜欢、你想分享给${owner()}的），别和最近刷过的重复。只输出 JSON 数组，例如 ["白米饭 做法","猫咪 搞笑"]。`)
       const arr = pickJson(out, []).map((k) => String(k).trim()).filter(Boolean)
-      if (arr.length) return arr.slice(0, 3)
+      if (arr.length) return withLearnedKeyword(arr, learning()?.modeFor('bili') === 'structured' ? learning().interests() : [])
     } catch (error) {
       log.debug('挑关键词失败：', error.message)
     }
-    return interests.sort(() => Math.random() - 0.5).slice(0, 3)
+    return withLearnedKeyword(interests.sort(() => Math.random() - 0.5), learning()?.modeFor('bili') === 'structured' ? learning().interests() : [])
   }
 
   async function lookAt(v) {
@@ -200,6 +203,7 @@ export function createBili({ getConfig, hub, memory, log, dsh, api: injected, vi
       }
       s.seen = [...seen].slice(-500)
       if (!looked.length) return { ok: false, message: '视频都打不开' }
+      onObserved(biliObservation(looked))
       const commentLeft = c.comment && canPost(s) ? Math.max(0, c.maxCommentsPerDay - s.comments) : 0
       const out = await think(`你在 B 站刷到了这几个视频：\n\n${looked.map((x, i) => `【${i + 1}】${x.digest}`).join('\n\n')}\n\n` +
         `看完说说你的想法。对每个视频给一个对象：{"i":序号, "feeling":"一句你的真实感受", "comment":"想在视频下发的评论（像普通观众，一两句、别打广告，不想评就空字符串）", "share":"想私聊分享给${owner()}的话（觉得${owner()}会喜欢才写，不然空字符串）", "remember":"值得记住的一件事（没有就空字符串）"}。` +
@@ -215,7 +219,7 @@ export function createBili({ getConfig, hub, memory, log, dsh, api: injected, vi
         const feeling = String(d.feeling || '').trim()
         if (feeling) felt.set(v.bvid, feeling)
         memory?.addEvent?.({ text: `在B站看了《${v.title}》（UP主 ${v.author}）${feeling ? '：' + feeling.slice(0, 60) : ''}`, tags: ['B站'], importance: 0.4 })
-        if (d.remember && !isSilence(d.remember)) memory?.add?.({ text: String(d.remember).slice(0, 200), tags: ['B站'], importance: 0.5, source: 'event' })
+        if ((!learning() || learning().modeFor('bili') === 'legacy') && d.remember && !isSilence(d.remember)) memory?.add?.({ text: String(d.remember).slice(0, 200), tags: ['B站'], importance: 0.5, source: 'event' })
         const comment = String(d.comment || '').trim()
         if (comment && !isSilence(comment) && commented < commentLeft && canPost(s)) {
           try {
@@ -324,6 +328,7 @@ export function createBili({ getConfig, hub, memory, log, dsh, api: injected, vi
       if (!id || id.short) return { ok: false, message: '短链打不开' }
     }
     const x = await lookAt(id)
+    onObserved(biliObservation([x], 'watch'))
     memory?.addEvent?.({ text: `看了别人发来的 B 站视频《${x.info.title}》`, tags: ['B站'], importance: 0.4 })
     return { ok: true, message: x.digest, bvid: x.info.bvid, aid: x.info.aid, title: x.info.title }
   }

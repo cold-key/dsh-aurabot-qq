@@ -123,6 +123,7 @@ const isUnsupportedEffort = (error) => {
 async function runStream (llm, params) {
   let out = ''
   for await (const chunk of llm.stream(params)) {
+    params.signal?.throwIfAborted()
     if (!chunk) continue
     if (chunk.type === 'text-delta') out += chunk.text
     if (chunk.type === 'finish' && chunk.reason && chunk.reason.kind === 'error') {
@@ -137,10 +138,11 @@ async function runStream (llm, params) {
 
 /**
  * @param {object} dsh 宿主 ctx
- * @param {{system:string, text:string, images?:Array<{data:string, mediaType:string}>, maxTokens?:number, temperature?:number, reasoningEffort?:string, cfg?:object}} o
+ * @param {{system:string, text:string, images?:Array<{data:string, mediaType:string}>, maxTokens?:number, temperature?:number, reasoningEffort?:string, cfg?:object, maxAttempts?:1, signal?:AbortSignal}} o
  * @returns {Promise<string>}
  */
 export async function askModel (dsh, o) {
+  o.signal?.throwIfAborted()
   const llm = dsh.llm || dsh.get('llm')
   if (!llm || typeof llm.stream !== 'function') throw new Error('宿主没有 llm 服务')
   const t = defaultModel(dsh, o.cfg)
@@ -161,14 +163,16 @@ export async function askModel (dsh, o) {
     messages,
     maxTokens: o.maxTokens || 600,
     temperature: o.temperature ?? 0.3,
+    ...(o.signal ? { signal: o.signal } : {}),
   }
   let effort = await pickReasoningEffort(dsh, t.provider, t.model, o.reasoningEffort === undefined ? 'low' : o.reasoningEffort)
   for (let attempt = 0; ; attempt++) {
     try {
+      o.signal?.throwIfAborted()
       return await runStream(llm, effort ? { ...base, reasoningEffort: effort } : base)
     } catch (error) {
       // 能力探测没查到 / 模型临时不认：去掉思考强度再来一次
-      if (attempt === 0 && effort && isUnsupportedEffort(error)) {
+      if (o.maxAttempts !== 1 && attempt === 0 && effort && isUnsupportedEffort(error)) {
         cacheReasoning(t.provider, t.model, null)
         effort = undefined
         continue

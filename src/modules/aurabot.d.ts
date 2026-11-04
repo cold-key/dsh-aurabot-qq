@@ -56,6 +56,32 @@ export interface GroupDecision {
 
 export interface ModelSelection { provider: string; model: string; reasoningEffort?: string }
 
+/** 仅包含已经读取的公开内容；平台和链接由学习模块校验并绑定。 */
+export interface BrowseObservation {
+  platform: 'bili' | 'douyin'
+  origin?: 'browse' | 'watch'
+  items: Array<{
+    id: string
+    title?: string
+    author?: string
+    /** 毫秒时间戳；未知时省略 */
+    publishedAt?: number
+    sections: Array<{ kind: 'title' | 'description' | 'subtitle' | 'comments' | 'vision' | 'summary' | 'chapters'; text: string }>
+  }>
+}
+
+export interface AskOptions {
+  system?: string
+  text: string
+  maxTokens?: number
+  temperature?: number
+  reasoningEffort?: string
+  /** 设为 1 时，思考强度不兼容也不进行第二次模型调用 */
+  maxAttempts?: 1
+  /** 尽力取消；实际支持程度取决于 DSH 模型适配器 */
+  signal?: AbortSignal
+}
+
 /** 工具生成函数拿到的「在哪儿」。 */
 export interface Where {
   chat: Chat
@@ -112,7 +138,7 @@ export interface Events {
   /** 群里这条消息她回不回：返回对象覆盖决定，比如 { reply: true, mode: 'must' }（返回 null 无效，等于不改） */
   'group/decide': (decision: GroupDecision, info: { msg: Message; policy: any; recentTexts: string[]; memScore: number }) => Partial<GroupDecision> | void | Promise<Partial<GroupDecision> | void>
   /** 交给她的内容（[{ type: 'text', text }, { type: 'image', ... }]）：返回新数组改写，null 这次不交给她 */
-  prompt: (content: any[], info: { chat: Chat; senderId: string; queryText?: string }) => any[] | null | void | Promise<any[] | null | void>
+  prompt: (content: any[], info: { chat: Chat; senderId: string; queryText?: string; prevText?: string; sessionId?: string }) => any[] | null | void | Promise<any[] | null | void>
   /** 这个聊天用哪个模型（同步）：返回 { provider, model, reasoningEffort } */
   model: (selection: ModelSelection | null, chat: Chat) => ModelSelection | void
   /** 她的人格全文（同步）：返回新文字改写 */
@@ -130,6 +156,8 @@ export interface Events {
   'module/start': (id: string) => void
   'module/stop': (id: string) => void
   'song/sung': (info: { title: string; chatId: ChatId }) => void
+  /** 通知浏览学习模块；监听器只负责入队，不等待提炼完成 */
+  'browse/observed': (batch: BrowseObservation) => void
   [custom: string]: (...args: any[]) => any
 }
 
@@ -166,7 +194,7 @@ export interface Api {
   onebot(action: string, params?: any, opts?: { timeoutMs?: number }): Promise<any>
 
   // ---- 模型 ----
-  ask(opts: string | { system?: string; text: string; maxTokens?: number }): Promise<string>
+  ask(opts: string | AskOptions): Promise<string>
   think(prompt: string, opts?: { title?: string; timeoutMs?: number }): Promise<string>
 
   // ---- 往插件里加东西（都返回撤掉函数）----
