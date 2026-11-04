@@ -40,7 +40,7 @@ export function digestOf(v, { subtitle = '', comments = [], vision = '' } = {}) 
   ].filter(Boolean).join('\n')
 }
 
-export function createBili({ getConfig, hub, memory, log, dsh, api: injected, vision: see = lookWithVision, learning = () => null, onObserved = () => {} }) {
+export function createBili({ getConfig, hub, memory, log, dsh, api: injected, vision: see = lookWithVision, learning = () => null, personality = () => null, onObserved = () => {} }) {
   const cfg = () => getConfig().bili
   const api = injected || createBiliApi({ getCookie: () => cfg().cookie, log })
   const shots = createShotStore({ max: () => getConfig().bili.shotLibrary })
@@ -51,7 +51,7 @@ export function createBili({ getConfig, hub, memory, log, dsh, api: injected, vi
   let busy = false
   let login = { at: 0, value: { isLogin: false, uname: '' } }
 
-  const owner = () => getConfig().ownerName || '主人'
+  const owner = () => personality()?.current() ? '朋友' : getConfig().ownerName || '主人'
   // 能不能发评论 / 回复：Cookie 里要有 bili_jct，今天也没因为风控之类暂停
   const canPost = (s) => Boolean(parseCookie(cfg().cookie).bili_jct) && s.pauseDay !== dayKey()
   const pauseIf = (s, error) => {
@@ -82,17 +82,17 @@ export function createBili({ getConfig, hub, memory, log, dsh, api: injected, vi
   /** 这一轮搜什么：她自己的兴趣 + 记忆里你喜欢的东西 + 面板里填的关键词，让她挑 3 个。 */
   async function chooseKeywords() {
     const c = cfg()
-    const interests = [...(c.keywords || []), ...(getConfig().group.interests || [])]
+    const interests = [...(c.keywords || []), ...(personality()?.current() ? personality().ownerInterests() : getConfig().group.interests || [])]
     const about = (memory?.list?.('') || []).filter((m) => String(m.about) === String(getConfig().ownerQQ) || /喜欢|爱|想|在玩|在看|追/.test(m.text)).slice(0, 12).map((m) => m.text)
     const recent = (memory?.recentEvents?.(72, 6) || []).filter((m) => (m.tags || []).includes('B站')).map((m) => m.text)
     try {
       const out = await think(`你想去 B 站刷点视频。你感兴趣的：${interests.join('、') || '随便看看'}。\n你记得的关于${owner()}和大家的事：\n${about.map((t) => '- ' + t).join('\n') || '（暂无）'}\n最近刷过的：\n${recent.map((t) => '- ' + t).join('\n') || '（暂无）'}\n\n挑 3 个这次想搜的关键词（可以是你自己想看的，也可以是${owner()}可能喜欢、你想分享给${owner()}的），别和最近刷过的重复。只输出 JSON 数组，例如 ["白米饭 做法","猫咪 搞笑"]。`)
       const arr = pickJson(out, []).map((k) => String(k).trim()).filter(Boolean)
-      if (arr.length) return withLearnedKeyword(arr, learning()?.modeFor('bili') === 'structured' ? learning().interests() : [])
+      if (arr.length) return withLearnedKeyword(arr, [...(personality()?.topics() || []), ...(learning()?.modeFor('bili') === 'structured' ? learning().interests() : [])])
     } catch (error) {
       log.debug('挑关键词失败：', error.message)
     }
-    return withLearnedKeyword(interests.sort(() => Math.random() - 0.5), learning()?.modeFor('bili') === 'structured' ? learning().interests() : [])
+    return withLearnedKeyword(interests.sort(() => Math.random() - 0.5), [...(personality()?.topics() || []), ...(learning()?.modeFor('bili') === 'structured' ? learning().interests() : [])])
   }
 
   async function lookAt(v) {
@@ -224,7 +224,10 @@ export function createBili({ getConfig, hub, memory, log, dsh, api: injected, vi
         if (comment && !isSilence(comment) && commented < commentLeft && canPost(s)) {
           try {
             if (getConfig().dryRun) log.info(`试运行：本来要在 B 站《${v.title}》下评论：${comment}`)
-            else await api.postComment(v.aid, comment.slice(0, 200))
+            else {
+              await api.postComment(v.aid, comment.slice(0, 200))
+              if (!force) onObserved({ ...biliObservation([x]), voluntary: true })
+            }
             commented++
             s.comments++
             memory?.addEvent?.({ text: `在B站《${v.title}》下评论：${comment.slice(0, 60)}`, tags: ['B站'], importance: 0.4 })

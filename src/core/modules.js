@@ -14,6 +14,7 @@ import { pathToFileURL, fileURLToPath } from 'node:url'
 import { dataDir } from './store.js'
 import { registerSecretField } from './config.js'
 import { defineTool } from '../tools/tools.js'
+import { randomUUID } from 'node:crypto'
 
 /** 扩展接口版本：只加不改。哪天不得不改已有的东西才升到 2，并在更新说明里写清楚怎么迁移。 */
 export const API_VERSION = 1
@@ -528,7 +529,20 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
           if (!t || !t.name) continue
           if (names.has(t.name)) { log.debug(`工具 ${t.name} 重名，模块「${rec.id}」的没挂`); continue }
           names.add(t.name)
-          out.push(t)
+          if (typeof t.execute !== 'function') { out.push(t); continue }
+          out.push({ ...t, execute: async (...args) => {
+            const profileId = exportsOf('personality')?.current()?.id
+            const notify = (status) => {
+              if (!profileId || exportsOf('personality')?.current()?.id !== profileId || core.hub.isSimulating?.()) return
+              emit('experience/recorded', { source: 'tool', originId: randomUUID(), actor: 'agent', status,
+                chatId: where.chat?.chatId, session: where.sessionId, text: `工具 ${t.name} 的实际返回结果：${status}`, voluntary: false, simulated: getConfig().dryRun })
+            }
+            try {
+              const result = await t.execute(...args)
+              notify(result?.ok === true && !result.simulated && !result.dryRun ? 'success' : 'failed')
+              return result
+            } catch (error) { notify('failed'); throw error }
+          } })
         }
       }
     }

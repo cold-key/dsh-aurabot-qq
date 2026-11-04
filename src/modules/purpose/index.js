@@ -40,6 +40,8 @@ export default {
       mood: () => api.use('mood'),
       memory: () => api.use('memory'),
       learning: () => api.use('social-learning'),
+      personality: () => api.use('personality'), role: () => api.core.personas.name?.() || '角色',
+      onExperience: (e) => api.emit('experience/recorded', e),
       // 载体分发用（面板里 carrier=pet 时推桌宠气泡；桌宠没开是 null，按离线回落处理）
       pet: () => api.use('pet'),
       personaText: () => { try { return api.core.personas?.current?.() || '' } catch { return '' } },

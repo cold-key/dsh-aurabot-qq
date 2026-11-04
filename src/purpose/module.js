@@ -10,6 +10,8 @@
 // 想换引擎的主人自己开关，迁移说明见 docs/PURPOSE_MODULE_API.md。
 
 import { dataDir, readJson, writeJson } from '../core/store.js'
+import { AsyncLocalStorage } from 'node:async_hooks'
+import { randomUUID } from 'node:crypto'
 import {
   DEFAULT_PURPOSE_CONFIG, PURPOSE_NEEDS, NEED_LABELS,
   normalizePurposeConfig, createPurposeState, normalizePurposeState,
@@ -67,24 +69,29 @@ export function purposeConfig(cfg = {}) {
 }
 
 /** 模型回包清洗：去掉备忘段、引号、「大肥鱼：」前缀；空/沉默返回 ''。 */
-export function cleanReply(raw) {
+export function cleanReply(raw, roleName = ROLE) {
   let s = String(raw ?? '')
   const cut = /(^|\n)\s*[【\[]\s*(目的|需求|情绪|类型|状态|待续)\s*[】\]]/.exec(s)
   if (cut) s = s.slice(0, cut.index) // 内部备忘不发到 QQ
   s = s.replace(/^[「“"'']+/, '').replace(/[」”"'']+$/, '')
-  s = s.replace(new RegExp(`^${ROLE}\\s*[:：]\\s*`), '')
+  const prefix = String(roleName).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  s = s.replace(new RegExp(`^${prefix}\\s*[:：]\\s*`), '')
   s = s.trim()
   if (!s || s.replace(/\s/g, '').startsWith(SILENCE)) return ''
   return s
 }
 
-export function createPurpose({ getConfig, setConfig, hub, log, isMuted, mood, memory, learning, personaText, pet: petOf }) {
+export function createPurpose({ getConfig, setConfig, hub, log, isMuted, mood, memory, learning, personality = () => null, role = () => ROLE, onExperience = () => {}, personaText, pet: petOf }) {
   const moodOf = () => { try { return mood?.() || null } catch { return null } }
   const memoryOf = () => { try { return memory?.() || null } catch { return null } }
   const chatIdOf = (cfg) => `private:${cfg.ownerQQ}`
   const lastPrivateAt = (cfg) => Math.max(hub?.lastOwnerChatAt || 0, hub?.lastBotToOwner?.at || 0)
-  const stateFile = () => dataDir('purpose', 'purpose-state.json')
-  const nudgeFile = () => dataDir('purpose', 'nudge.json')
+  const scope = new AsyncLocalStorage()
+  const profile = () => scope.getStore()?.profile ?? personality()?.current()
+  const scoped = (fn) => (...args) => scope.run({ profile: personality()?.current() || false }, () => fn(...args))
+  const stateFile = () => profile() ? dataDir('modules-data', 'personality', profile().id, 'purpose-state.json') : dataDir('purpose', 'purpose-state.json')
+  const nudgeFile = () => profile() ? dataDir('modules-data', 'personality', profile().id, 'nudge.json') : dataDir('purpose', 'nudge.json')
+  const usageFile = () => dataDir('purpose', 'shared-usage.json')
 
   // ---------- 状态 ----------
   function loadState(config, now = Date.now()) {
@@ -101,10 +108,30 @@ export function createPurpose({ getConfig, setConfig, hub, log, isMuted, mood, m
       state.nextFireAt = 0
     }
     ensurePurposeDay(state, now)
+    const usage = readJson(usageFile(), null)
+    if (usage?.day === state.day) state.countToday = Math.max(state.countToday, usage.count || 0)
     ensurePurposeSchedule(state, { now, config })
     return state
   }
   const saveState = (state) => writeJson(stateFile(), state)
+  function reserveUsage(state) {
+    const old = readJson(usageFile(), null)
+    const usage = old?.day === state.day ? old : { day: state.day, count: 0, pending: {} }
+    usage.pending ||= {}
+    const token = randomUUID()
+    usage.count = Math.max((usage.count || 0) + 1, state.countToday)
+    usage.pending[token] = true
+    usage.pending = Object.fromEntries(Object.entries(usage.pending).slice(-100))
+    writeJson(usageFile(), usage)
+    return { token, day: state.day }
+  }
+  function settleUsage(reservation, silent) {
+    const usage = readJson(usageFile(), null)
+    if (usage?.day !== reservation.day || !usage.pending?.[reservation.token]) return
+    delete usage.pending[reservation.token]
+    if (silent) usage.count = Math.max(0, usage.count - 1)
+    writeJson(usageFile(), usage)
+  }
 
   // ---------- 素材（记忆 importance 0~1 → 引擎 0~100） ----------
   function memoryRecords() {
@@ -121,7 +148,7 @@ export function createPurpose({ getConfig, setConfig, hub, log, isMuted, mood, m
           lastSeenAt: m.lastHit || m.at,
           createdAt: m.at,
           pinned: false, anchor: false, isInitial: false,
-        })).concat(learning?.()?.materials?.() || [])
+        })).concat(learning?.()?.materials?.() || [], personality()?.materials() || [])
     } catch {
       return []
     }
@@ -141,13 +168,14 @@ export function createPurpose({ getConfig, setConfig, hub, log, isMuted, mood, m
       for (const day of days.slice(-2)) {
         for (const e of hub.chatLogOf?.(day) || []) {
           if (!e?.chatId) continue
+          if (personality()?.current() && (e.profileId !== personality().current().id || e.t < personality().current().bornAt)) continue
           if (e.chatId !== ownerKey && !String(e.chatId).startsWith('group:')) continue
           pick(e.chatId).recentMessages.push({
             text: String(e.text || ''),
             time: Number(e.t) || 0,
             isSelf: e.who === 'bot',
             isOwner: e.chatId === ownerKey && e.who !== 'bot',
-            sender: e.who === 'bot' ? ROLE : String(e.uid || '群友'),
+            sender: e.who === 'bot' ? role() : String(e.uid || '群友'),
           })
         }
       }
@@ -158,7 +186,11 @@ export function createPurpose({ getConfig, setConfig, hub, log, isMuted, mood, m
   }
 
   const personaOf = (cfg) => {
-    try { return analyzePersona(personaText?.() || '') } catch { return analyzePersona('') }
+    try {
+      const base = analyzePersona(personaText?.() || ''), p = personality()?.current()
+      if (!p) return base
+      return { ...base, bias: { ...base.bias, learn: p.state.traits.curiosity * 0.2, share: p.state.traits.sociability * 0.2, connect: p.state.traits.sociability * 0.2, identity: p.state.traits.assertiveness * 0.15 } }
+    } catch { return analyzePersona('') }
   }
 
   // ①~④ 收素材 → 驱动 → 目标假设 → 候选（只读，不落盘）
@@ -166,7 +198,7 @@ export function createPurpose({ getConfig, setConfig, hub, log, isMuted, mood, m
     const materials = collectMaterials({
       now, config,
       ownerUin: cfg.ownerQQ,
-      roleName: ROLE,
+      roleName: role(),
       conversations: conversations(cfg, now),
       biliEntries: [], // 首期不接 B站/Qzone 素材，字段留扩展
       memoryRecords: memoryRecords(),
@@ -179,10 +211,10 @@ export function createPurpose({ getConfig, setConfig, hub, log, isMuted, mood, m
     })
     const { goals, observations } = formGoalHypotheses({
       materials: materials.items, goals: state.goals, observations: state.observations,
-      drives, now, lastMasterAt, config, roleName: ROLE, persona,
+      drives, now, lastMasterAt, config, roleName: role(), persona,
     })
     const seeds = minePurposeSeeds({
-      materials: materials.items, now, roleName: ROLE, config,
+      materials: materials.items, now, roleName: role(), config,
       drives, history: state.history, lastMasterAt,
     })
     return { materials, persona, lastMasterAt, drives, goals, observations, seeds }
@@ -192,7 +224,7 @@ export function createPurpose({ getConfig, setConfig, hub, log, isMuted, mood, m
     return buildPurposePrompt({
       now, config, mode: 'auto', // 模型直接输出那句话（Aurabot 没有 QQ 发送工具）
       ownerUin: cfg.ownerQQ,
-      ownerName: cfg.ownerName || '主人',
+      ownerName: personality()?.current() ? '朋友' : cfg.ownerName || '主人',
       contextBlocks: [],
       materials: ctx.materials.items,
       candidates: ctx.candidates,
@@ -251,6 +283,7 @@ export function createPurpose({ getConfig, setConfig, hub, log, isMuted, mood, m
   // ---------- 生成 + 投递 + 回执（hub.deliver 内部吞错，成功判定看返回值） ----------
   async function runOnce({ reason = '定时', config, state, force = false } = {}) {
     const cfg = getConfig()
+    const profileId = personality()?.current()?.id
     const now = Date.now()
     ensurePurposeDay(state, now)
     const ctx = prepare(cfg, config, state, now)
@@ -284,6 +317,7 @@ export function createPurpose({ getConfig, setConfig, hub, log, isMuted, mood, m
     const prompt = promptFor(cfg, config, picked.purpose, { ...ctx, candidates: picked.candidates }, state, now)
     // 投递即占今日次数（模型回合已经花钱了）；引擎随后按真结局结算
     markPurposeDelivered(state, { now, planned: picked.purpose })
+    const reservation = reserveUsage(state)
     saveState(state)
 
     let raw = ''
@@ -296,7 +330,8 @@ export function createPurpose({ getConfig, setConfig, hub, log, isMuted, mood, m
       log.warn?.('目的：生成出错：', error?.message)
     }
     const memo = parsePurposeMemo(raw)
-    const text = cleanReply(raw)
+    if (profileId !== personality()?.current()?.id) { settleUsage(reservation, false); state.lastOutcome = 'interrupted'; saveState(state); return { outcome: 'interrupted' } }
+    const text = cleanReply(raw, role())
     let outcome
     if (!text) {
       outcome = genError ? 'failed' : 'silent' // 模型有权跳过（【状态】跳过 / [沉默]），silent 不硬发
@@ -309,6 +344,8 @@ export function createPurpose({ getConfig, setConfig, hub, log, isMuted, mood, m
       } else {
         try {
           const r = await hub.deliver(chatIdOf(cfg), text, { own: true, userText: MOOD_PREFIX })
+          if (r?.sent) onExperience({ source: 'purpose', originId: (r.receiptIds || []).join(',') || String(Date.now()), status: 'success', actor: 'agent',
+            voluntary: reason !== '手动', session: 'purpose', text: `主动分享了关于「${picked.purpose.text}」的想法，收到网关发送回执`, simulated: cfg.dryRun })
           outcome = r && typeof r === 'object' ? 'sent' : 'silent' // deliver 吞错只返回 undefined / {missedAt}
         } catch (error) {
           outcome = 'delivery-failed'
@@ -317,6 +354,7 @@ export function createPurpose({ getConfig, setConfig, hub, log, isMuted, mood, m
       }
     }
     applyPurposeOutcome(state, { now: Date.now(), config, outcome, text, memo, planned: picked.purpose })
+    settleUsage(reservation, outcome === 'silent')
     nudgeMood(picked.purpose, outcome)
     saveState(state)
     log.info?.(`目的：回合结束 ${outcome}（今天第 ${state.countToday} 次）`)
@@ -348,11 +386,11 @@ export function createPurpose({ getConfig, setConfig, hub, log, isMuted, mood, m
     writeJson(nudgeFile(), { nudgedFor: lb.at }) // 引擎状态文件会被 normalize 洗字段，追问标记单独存
     if (Math.random() >= 0.5) return true
     const idle = Math.round(quietMs / MINUTE)
-    const owner = cfg.ownerName || '主人'
+    const owner = personality()?.current() ? '朋友' : cfg.ownerName || '主人'
     const prompt = `【系统提醒，不是${owner}说的话】你刚才跟${owner}说「${String(lb.text || '').slice(-60)}」，${owner}已经 ${idle} 分钟没回了。可以轻轻追一句（比如「人呢」「睡着啦？」，或者换个话题），别催、别抱怨；觉得${owner}在忙就只回 ${SILENCE}。这一轮不能用工具，直接输出那句话。`
     try {
       const raw = await hub.runSystemTurn('purpose-nudge', 'QQ · 主动搭话（追问）', prompt, { timeoutMs: 120000, noTools: true })
-      const text = cleanReply(raw)
+      const text = cleanReply(raw, role())
       if (text) await hub.deliver(chatIdOf(cfg), text, { own: true, userText: MOOD_PREFIX })
     } catch (error) {
       log.warn?.('目的：追问出错：', error?.message)
@@ -457,5 +495,5 @@ export function createPurpose({ getConfig, setConfig, hub, log, isMuted, mood, m
     return `（你最近心里比较想要：${top.map((t) => t.label).join('、')}。它会自然影响你想聊什么，不用说出来。）`
   }
 
-  return { tick, fire, state, status, preview, run: fire, drivesRule }
+  return { tick: scoped(tick), fire: scoped(fire), state, status, preview, run: scoped(fire), drivesRule }
 }

@@ -53,7 +53,7 @@ const sessionKey = (id) => {
  */
 // 模拟测试：这里面发出去的消息只记下来，不真发
 const captureStore = new AsyncLocalStorage()
-export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildTools, contextProviders, onActivity, memoryScore, onCommand, isMuted, moodEffects, localApi, hooks, availableModels, toolsGeneration }) {
+export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildTools, contextProviders, onActivity, memoryScore, onCommand, isMuted, moodEffects, localApi, hooks, availableModels, toolsGeneration, identityScope = () => '' }) {
   // 心情对行为的影响（表情 / 语音概率、回复快慢、插话积极程度），没接就是 1
   const mood = () => (typeof moodEffects === 'function' ? moodEffects() : null) || { sticker: 1, voice: 1, delay: 1, chatty: 1 }
   const mapFile = () => dataDir('sessions.json')
@@ -163,13 +163,13 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   }
 
   // ---------- 聊天流水（给空间日记、主动搭话、面板用） ----------
-  function logChat(chatId, who, text, uid = '') {
+  function logChat(chatId, who, text, uid = '', profileId = identityScope()) {
     try {
       const d = new Date()
       const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
       const dir = dataDir('chatlog')
       mkdirSync(dir, { recursive: true })
-      appendFileSync(join(dir, `${day}.jsonl`), JSON.stringify({ t: Date.now(), chatId, who, ...(uid ? { uid: String(uid) } : {}), text: redact(String(text).slice(0, 500)) }) + '\n', 'utf8')
+      appendFileSync(join(dir, `${day}.jsonl`), JSON.stringify({ t: Date.now(), chatId, who, profileId, ...(uid ? { uid: String(uid) } : {}), text: redact(String(text).slice(0, 500)) }) + '\n', 'utf8')
     } catch (error) {}
   }
 
@@ -461,7 +461,9 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       const r = await onebot.call(action, params)
       if (r && r.message_id !== undefined) {
         sentIds.add(String(r.message_id))
+        deliveryReceipts.getStore()?.push(String(r.message_id))
         if (sentIds.size > 500) sentIds.delete(sentIds.values().next().value)
+        onActivity?.({ kind: 'receipt', eventId: `qq:${chatId}:${r.message_id}`, status: 'sent', chatId, at: Date.now(), text: String(note || '').slice(0, 300), messageId: r.message_id })
       }
       bump('sent')
       return r
@@ -642,7 +644,12 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   }
 
   /** 一轮回复落地：拆条、语音、表情。 */
-  async function deliver(chatId, text, opts = {}) {
+  const deliveryReceipts = new AsyncLocalStorage()
+  function deliver(chatId, text, opts = {}) {
+    return deliveryReceipts.run([], () => deliverInner(chatId, text, opts))
+  }
+  async function deliverInner(chatId, text, opts = {}) {
+    if ('profileId' in opts && opts.profileId !== identityScope()) return null
     const cfg = getConfig()
     if (hooks?.reply) {
       try {
@@ -724,7 +731,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     lastChatAt = Date.now()
     if (chatId === `private:${cfg.ownerQQ}`) lastBotToOwner = { at: Date.now(), text: items.filter((i) => i.kind === 'text' || i.kind === 'voice').map((i) => i.value).join('\n') }
     onActivity?.({ kind: 'out', chatId, reply: text, userText: opts.userText || '' })
-    return { missedAt }
+    return { missedAt, sent: Boolean(deliveryReceipts.getStore()?.length), receiptIds: deliveryReceipts.getStore() || [] }
   }
 
   // ---------- 盯 DSH 会话：一轮结束就发 ----------
@@ -788,7 +795,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       if (chatId.startsWith('system:')) return // 已超时的后台轮次不能误发到 QQ
       if (!text) return release(chatId)
       // 发完再放开：发送期间来的消息也攒到下一段
-      deliver(chatId, text, { wantVoice, autoReply, userText: st.lastText || '', own: true }).catch((error) => log.warn('发送出错：', error.message)).finally(() => release(chatId))
+      deliver(chatId, text, { wantVoice, autoReply, userText: st.lastText || '', own: true, profileId: st.profileId ?? identityScope() }).catch((error) => log.warn('发送出错：', error.message)).finally(() => release(chatId))
     }
   }
 
@@ -1154,7 +1161,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     logChat(msg.chatId, msg.nickname, text, msg.userId)
     lastChatAt = now
     if (msg.kind === 'private' && msg.userId === cfg.ownerQQ) lastOwnerChatAt = now
-    onActivity?.({ kind: 'in', chatId: msg.chatId, userId: msg.userId, nickname: msg.nickname, text, direct: msg.kind === 'private' || msg.mentioned || mode === 'must', owner: isOwner(cfg, msg.userId) })
+    onActivity?.({ kind: 'in', eventId: `qq:${msg.chatId}:${msg.messageId}`, at: now, simulated: cfg.dryRun || Boolean(captureStore.getStore()), chatId: msg.chatId, userId: msg.userId, nickname: msg.nickname, text, direct: msg.kind === 'private' || msg.mentioned || mode === 'must', owner: isOwner(cfg, msg.userId) })
 
     enqueue({ chatId: msg.chatId, kind: msg.kind, userId: msg.userId, groupId: msg.groupId, nickname: msg.nickname }, content, msg.userId, wantsVoice(msg.text), mode, { stickerPick })
   }
@@ -1450,6 +1457,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     for (const s of opts.extraSenders || []) addSender(s)
     // 上一句也留着：这一句太短（「嗯嗯」「然后呢」）时一起拿去想起相关的事
     if (st.lastText) st.prevText = st.lastText
+    st.profileId = identityScope()
     st.lastText = String(opts.queryText ?? content.filter((c) => c.type === 'text').map((c) => c.text).join('\n')).slice(-600)
     st.speakers = opts.speakers || (senderId ? [String(senderId), ...(opts.extraSenders || []).map(String)] : [])
     if (opts.wantVoice) st.wantVoice = true
@@ -1616,6 +1624,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     pushToSession,
     titleFilter,
     runSystemTurn,
+    isSimulating: () => Boolean(captureStore.getStore()),
     turnSendersAllOwner,
     turnHasOwner,
     resetChat,

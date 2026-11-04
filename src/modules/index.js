@@ -5,6 +5,7 @@ import voice from './voice/index.js'
 import mood from './mood/index.js'
 import memory from './memory/index.js'
 import socialLearning from './social-learning/index.js'
+import personality from './personality/index.js'
 import qqTools from './qq-tools/index.js'
 import groupAdmin from './group-admin/index.js'
 import imagegen from './imagegen/index.js'
@@ -20,4 +21,4 @@ import contacts from './contacts/index.js'
 import douyin from './douyin/index.js'
 import heybox from './heybox/index.js'
 
-export const BUILTINS = [stickers, voice, mood, memory, socialLearning, qqTools, groupAdmin, imagegen, diary, qzoneSocial, speakup, purpose, pet, bili, song, profile, contacts, douyin, heybox]
+export const BUILTINS = [personality, stickers, voice, mood, memory, socialLearning, qqTools, groupAdmin, imagegen, diary, qzoneSocial, speakup, purpose, pet, bili, song, profile, contacts, douyin, heybox]

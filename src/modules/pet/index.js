@@ -99,6 +99,7 @@ export default {
 
 
   setup(api) {
+    const personalityPlayback = new Map()
     const voiceDir = () => api.dataDir('voice')
     const hostFile = () => api.dataDir('host.json')
     const tokenFile = () => api.dataDir('host-token')
@@ -1169,7 +1170,8 @@ export default {
       else if (at > 0) lines = lines.slice(0, at)
       s = lines.join('\n').trim()
       s = s.replace(/^[「“"'']+/, '').replace(/[」”"'']+$/, '')
-      s = s.replace(/^大肥鱼\s*[:：]\s*/, '')
+      const roleName = api.core.personas?.name?.() || '大肥鱼'
+      s = s.replace(new RegExp('^' + roleName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*[:：]\\s*'), '')
       s = s.split('\n').map((x) => x.trim()).find(Boolean) || ''
       s = s.replace(/^[「“"'']+/, '').replace(/[」”"'']+$/, '')
       if (!s || /^[[（(【]?\s*(沉默|跳过|不想说)\s*[\]）)】]?$/.test(s)) return ''
@@ -1214,7 +1216,7 @@ export default {
       return [
         '（这一轮没有人跟你说话。你在自己的桌面角落自言自语，不是在回复消息，也不是主动搭话找人聊天。）',
         persona ? `【你的人格设定】\n${String(persona).slice(0, 1200)}` : '',
-        '【你是一只待在主人电脑桌面角落的小桌宠（大肥鱼）】',
+        '【你当前通过桌宠载体陪伴使用者，姓名、性格与关系按当前人格，不因素材外观改变身份】',
         mem.length ? `【你记得的事】\n${mem.map((t) => '- ' + t).join('\n')}` : '【你记得的事】（记忆库还很空）',
         `【现在】\n${busy}\n时段：${part}。心情：${moodNow()}。`,
         st.recent.length ? `【你最近已经嘟囔过】\n${st.recent.slice(-3).map((x) => '「' + x + '」').join('、')}（不要重复这些话）` : '',
@@ -1462,7 +1464,7 @@ export default {
       return [
         '（这一轮是桌宠自己的「行为回合」。你不聊天、不回复消息，只从下面的动作清单里挑一个动作，输出严格 JSON。）',
         persona ? `【你的人格设定】\n${String(persona).slice(0, 800)}` : '',
-        '【你是一只待在主人电脑桌面角落的小桌宠（大肥鱼）】',
+        '【你当前通过桌宠载体陪伴使用者，姓名、性格与关系按当前人格，不因素材外观改变身份】',
         mem.length ? `【你记得的事】\n${mem.map((t) => '- ' + t).join('\n')}` : '',
         `【现在】\n${busy}\n时段：${part}。心情：${moodNow()}。反应层：${reactLine}`,
         `【上一次动作的回执】${lastReceipt}`,
@@ -1562,6 +1564,11 @@ export default {
           return { ok: false, reason: 'close-window-disabled', message: '先在设置里打开「允许 AI 关闭窗口」' }
         }
         const playbackId = randomBytes(4).toString('hex')
+        const profileId = api.use('personality')?.current()?.id
+        if (profileId) {
+          personalityPlayback.set(playbackId, { profileId, action: act })
+          if (personalityPlayback.size > 100) personalityPlayback.delete(personalityPlayback.keys().next().value)
+        }
         const safeParams = params && typeof params === 'object' && !Array.isArray(params) ? { ...params } : {}
         // 气泡台词：动作必须有台词，否则主人只看见她在动、不知道她要干什么
         // （面板「试一下」这条手动路 AI 根本不给 say，全靠这里的默认台词兜底）
@@ -2052,6 +2059,12 @@ export default {
         detail: String(body.detail || '').slice(0, 160),
       }
       recordPlayback(entry)
+      const planned = personalityPlayback.get(playbackId)
+      personalityPlayback.delete(playbackId)
+      if (planned && planned.profileId === api.use('personality')?.current()?.id && planned.action === entry.action && entry.status === 'played') {
+        api.emit('experience/recorded', { source: 'pet', originId: playbackId, status: 'success', actor: 'agent', voluntary: false,
+          session: 'pet', text: `桌宠动作 ${entry.action} 收到客户端已执行回执`, simulated: api.config().dryRun })
+      }
       // 行为动作的回执写进 behavior.json 的 recent（供下轮简报），并写一条短记忆；失败只 log 不炸
       try {
         if (entry.action) {
@@ -2122,6 +2135,8 @@ export default {
       // 喂给 AI 下一轮简报（lastReaction），**不重复 emit**，避免双发。
       const st = loadBehavior()
       st.lastReaction = { kind, at: Date.now(), detail: String(body.detail || '').slice(0, 120) }
+      api.emit('experience/recorded', { source: 'pet', originId: `reaction:${kind}:${st.lastReaction.at}`, at: st.lastReaction.at,
+        status: 'received', actor: 'user', direct: true, session: 'pet', text: `桌宠真实交互：${kind} ${st.lastReaction.detail}`, simulated: api.config().dryRun })
       saveBehavior(st)
       api.core.http.send(res, 200, { ok: true, lastReaction: st.lastReaction })
     })

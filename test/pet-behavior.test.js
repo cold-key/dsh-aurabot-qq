@@ -31,6 +31,7 @@ function startModule({ settings = {} } = {}) {
   const s = { carrier: 'pet', modality: 'text', petFallbackToQQ: true, pack: 'default', ...settings }
   const routes = new Map()
   const sentToQQ = []
+  const experiences = []
   const api = {
     id: 'pet',
     dir: MODULE_DIR,
@@ -44,6 +45,7 @@ function startModule({ settings = {} } = {}) {
     route: (path, handler) => { routes.set(path, handler) },
     every: () => () => {},
     onDispose: () => {},
+    emit: (event, data) => { experiences.push({ event, data }) },
     has: (id) => id === 'mood' || id === 'memory',
     use: (id) => (id === 'mood' ? { current: () => moodValue, nudge: (d, r) => nudges.push({ d, r }) }
       : id === 'memory' ? { list: () => memItems, add: (e) => memAdds.push(e) } : null),
@@ -96,7 +98,7 @@ function startModule({ settings = {} } = {}) {
     return { cursor: first.json.cursor, events: r.json.events }
   }
   return {
-    api, exports, routes, call, connect, token, sentToQQ, nudges, memAdds, thinkCalls,
+    api, exports, routes, call, connect, token, sentToQQ, nudges, memAdds, thinkCalls, experiences,
     setMood: (v) => { moodValue = v }, setMemory: (list) => { memItems = list }, setThinkReply: (t) => { thinkReply = t },
   }
 }
@@ -368,6 +370,8 @@ test('/behavior/reaction：只记录 lastReaction 喂 AI，不重复 emit（客�
   const r = await env.call('/behavior/reaction', { method: 'POST', json: { kind: 'tease', detail: '主人在鼠标旁快速晃动' } })
   assert.equal(r.json.ok, true)
   assert.equal(r.json.lastReaction.kind, 'tease')
+  assert.equal(env.experiences[0].event, 'experience/recorded')
+  assert.equal(env.experiences[0].data.status, 'received')
   const raw = JSON.parse(readFileSync(env.api.dataDir('behavior.json'), 'utf8'))
   assert.equal(raw.lastReaction.kind, 'tease')
   assert.ok(raw.lastReaction.at > 0)

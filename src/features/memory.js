@@ -11,6 +11,7 @@
 // - 常驻的人物小档案（Letta 的 memory block）：每个人一小段印象，聊天时一直带着，不靠关键词碰运气。
 
 import { randomUUID } from 'node:crypto'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { dataDir, readJson, writeJson } from '../core/store.js'
 import { askModel } from '../core/llm.js'
 
@@ -168,8 +169,12 @@ export function parseReflection(out) {
   }
 }
 
-export function createMemoryStore({ dsh, getConfig, hub, log }) {
-  const file = () => dataDir('memories.json')
+export function createMemoryStore({ dsh, getConfig, hub, log, identity = () => '角色', personality = () => null }) {
+  const scope = new AsyncLocalStorage()
+  const profile = () => scope.getStore()?.profile ?? personality()?.current()
+  const roleName = () => profile()?.state?.identity?.name || identity()
+  const file = () => profile() ? dataDir('modules-data', 'personality', profile().id, 'memories.json') : dataDir('memories.json')
+  const scoped = (fn) => (...args) => scope.run({ profile: personality()?.current() || false }, () => fn(...args))
   const load = () => readJson(file(), () => ({ items: [] }))
   const save = (s) => {
     writeJson(file(), s)
@@ -178,7 +183,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
   let cache = null // { stamp, idx }
   const index = () => {
     const s = load()
-    const stamp = s.items.length + ':' + (s.items.at(-1)?.id || '') + ':' + (s.rev || 0)
+    const stamp = file() + ':' + s.items.length + ':' + (s.items.at(-1)?.id || '') + ':' + (s.rev || 0)
     if (!cache || cache.stamp !== stamp) cache = { stamp, idx: buildIndex(s.items) }
     return cache.idx
   }
@@ -214,7 +219,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
     for (const part of chunks) {
       const r = await askModel(dsh, {
         cfg: getConfig(),
-        system: '你帮一个叫「大肥鱼」的聊天角色从旧档案（设定、聊天笔记、以前的记忆文件）里挑出值得长期记住的事：别人的名字/称呼、喜好、身份、约定、重要经历、和她的关系。不要记她自己的人设和外貌（那些在人格里），不要记无关的说明文字。每条一句话、主语写清楚。只输出 JSON 数组，例如 [{"text":"小明喜欢吃辣","about":"小明","importance":0.6}]。',
+        system: '你帮一个叫「' + roleName() + '」的聊天角色从旧档案（设定、聊天笔记、以前的记忆文件）里挑出值得长期记住的事：别人的名字/称呼、喜好、身份、约定、重要经历、和她的关系。不要记她自己的人设和外貌（那些在人格里），不要记无关的说明文字。每条一句话、主语写清楚。只输出 JSON 数组，例如 [{"text":"小明喜欢吃辣","about":"小明","importance":0.6}]。',
         text: part,
         maxTokens: 2500,
         temperature: 0.2,
@@ -382,8 +387,8 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
     const old = profileOf(qq)?.text || ''
     const out = await askModel(dsh, {
       cfg,
-      system: '你是「大肥鱼」。根据你记得的关于一个人的事，写一张给自己看的人物小档案：TA 是谁、怎么称呼、和你什么关系、性格和喜好、最近在忙什么。只写记忆里明确有的，不要推测性格、不要编，也不要写「应该」「可能」这种猜的话；旧档案和新记忆矛盾时以新记忆为准。用第三人称，一段话，100 字以内，不要标题和列表。',
-      text: `${String(qq) === String(cfg.ownerQQ) ? `这是你的${cfg.ownerName || '主人'}。\n` : ''}旧档案：${old || '（还没有）'}\n\n记得的事（越往下越新）：\n${mine.slice(-40).map((m) => `- [${whenText(m.at)}] ${m.text}`).join('\n')}`,
+      system: '你是「' + roleName() + '」。根据你记得的关于一个人的事，写一张给自己看的人物小档案：TA 是谁、怎么称呼、和你什么关系、性格和喜好、最近在忙什么。只写记忆里明确有的，不要推测性格、不要编，也不要写「应该」「可能」这种猜的话；旧档案和新记忆矛盾时以新记忆为准。用第三人称，一段话，100 字以内，不要标题和列表。',
+      text: `${String(qq) === String(cfg.ownerQQ) ? `这是你的${profile() ? '朋友' : cfg.ownerName || '主人'}。\n` : ''}旧档案：${old || '（还没有）'}\n\n记得的事（越往下越新）：\n${mine.slice(-40).map((m) => `- [${whenText(m.at)}] ${m.text}`).join('\n')}`,
       maxTokens: 1500,
       temperature: 0.3,
     })
@@ -434,6 +439,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
     try {
       for (const dk of [dayKey(), dayKey(new Date(cutoff))]) {
         for (const l of hub?.chatLogOf?.(dk) || []) {
+          if (profile() && l.profileId !== profile().id) continue
           if (!l || !String(l.chatId).startsWith('group:') || !String(l.text || '').trim()) continue
           const t = Number(l.t) || 0
           if (t && t < cutoff) continue
@@ -510,7 +516,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
     const who = chat.kind === 'group' ? '这个群' : '对方'
     const out = await askModel(dsh, {
       cfg: getConfig(),
-      system: '你是「大肥鱼」，在回顾自己和' + who + '的相处。输出一个 JSON 对象 {"insights":[...],"style":[...]}。\n'
+      system: '你是「' + roleName() + '」，在回顾自己和' + who + '的相处。输出一个 JSON 对象 {"insights":[...],"style":[...]}。\n'
         + 'insights：「怎么相处更好」的经验。概括性的、可复用的相处之道（比如「他累的时候不想多聊，简单安慰就好」「喜欢被吐槽，不喜欢太正经」），不要记具体事件和事实细节；和已有经验重复的合并，过时或被证伪的删掉，不超过 8 条，每条不超过 30 字。\n'
         + 'style：' + who + '的说话方式，以及你和' + who + '聊天时可以自然贴近的地方（比如「消息很短，常一句话分几条发」「爱用“hhh”和“草”」「不爱用标点」「喜欢叠字」），只写说话的形式和习惯，不写内容；不超过 5 条，每条不超过 30 字。\n'
         + '只输出这个 JSON 对象。',
@@ -533,7 +539,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
 
   /** 从一段聊天里提炼长期记忆，并回顾相处经验。lines：[{who, text}] */
   async function extractLines(chatId, lines) {
-    const talk = lines.filter((l) => l.text && !String(l.text).startsWith('【系统'))
+    const talk = lines.filter((l) => l.text && !String(l.text).startsWith('【系统') && (!profile() || l.profileId === profile().id && l.t >= profile().bornAt))
     const isQzone = chatId === 'qzone'
     // 空间动态一条就可能有料；聊天至少要几句
     if (talk.filter((l) => l.who !== 'bot').length < (isQzone ? 1 : 3)) return { ok: false, message: '内容太少', added: 0, insights: 0 }
@@ -583,7 +589,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
     const known = new Map(related.map((m) => [m.id, m]))
     const out = await askModel(dsh, {
       cfg,
-      system: `你帮一个叫「大肥鱼」的聊天角色整理长期记忆。${source}，说话人后面括号里是 QQ 号。挑出以后值得记住的事实：别人的名字/称呼、喜好、讨厌的东西、身份、近况和重要经历、约定、你们之间的关系变化。不要记寒暄、日常琐事、一次性的问答；不要记大肥鱼自己的人设和喜好（她本来就知道），只记关于别人、以及你们之间的事。每条一句话，主语写清楚是谁。QQ 号是 ${cfg.ownerQQ} 的人是她的${cfg.ownerName || '主人'}。` +
+      system: `你帮一个叫「${roleName()}」的聊天角色整理长期记忆。${source}，说话人后面括号里是 QQ 号。挑出以后值得记住的事实：别人的名字/称呼、喜好、讨厌的东西、身份、近况和重要经历、约定、你们之间的关系变化。不要记寒暄、日常琐事、一次性的问答；不要记${roleName()}自己的人设和喜好（她本来就知道），只记关于别人、以及你们之间的事。每条一句话，主语写清楚是谁。QQ 号是 ${cfg.ownerQQ} 的人是她的${profile() ? '朋友' : cfg.ownerName || '主人'}。` +
         (related.length ? '\n每条新事实先和「已经记得的事」比一比：全新的写 "op":"add"；是对某条旧记忆的补充或更准确的说法，写 "op":"update"、"id" 填那条的编号、"text" 写合并后的完整说法；和某条旧记忆矛盾、说明那条已经过时（比如以前喜欢现在不喜欢了、换了工作、搬家了、分手了），写 "op":"outdated"、"id" 填旧的编号、"text" 写现在的新事实。拿不准是不是矛盾就当 add；已经记得、没有新信息的不要输出。' : '') +
         `只输出 JSON 数组，例如 [{"op":"add","text":"小明喜欢吃辣","about":"小明","about_qq":"12345","importance":0.6}]（about_qq 写这件事是关于谁的 QQ 号，不知道就不写），没有值得记的就输出 []。`,
       text: (related.length ? `已经记得的事：\n${related.map((m) => `#${m.id} [${whenText(m.at)}] ${m.aboutName ? '[' + m.aboutName + '] ' : ''}${m.text}`).join('\n')}\n\n` : '') + transcript,
@@ -595,7 +601,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
     let n = 0
     for (const x of arr.slice(0, 12)) {
       if (!x || !x.text) continue
-      if (/^(我|大肥鱼)/.test(String(x.about || '')) || String(x.about || '') === '大肥鱼') continue
+      if (/^(我|大肥鱼)/.test(String(x.about || '')) || String(x.about || '') === roleName()) continue
       // 关于谁：模型给了 QQ 号就用（群聊、空间里也能记到人头上），私聊默认是对方
       const qq = String(x.about_qq ?? '').replace(/\D/g, '')
       const about = qq.length >= 5 && qq !== String(cfg.botQQ) ? qq : chatId.startsWith('private:') ? chatId.slice(8) : ''
@@ -659,7 +665,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
         const s = load()
         s.processed = s.processed || {}
         if (day < today) {
-          hub.deleteChatLog(day) // 整理完清空（今天的留着，写日记还要用）
+          if (!profile()) hub.deleteChatLog(day) // 独立人格不删除其他档案共享的历史流水
           delete s.processed[day]
         } else {
           s.processed[day] = all.length
@@ -697,13 +703,14 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
 
   /** 从各人的说话方式里，沉淀出几条她自己不知不觉学会的说法（很少、很淡）。 */
   async function learnSelfStyle() {
+    if (profile()) return 0 // 独立人格的长期表达习惯由每日人格反思统一管理
     const s = load()
     const pool = Object.entries(s.styles || {}).filter(([k]) => k !== 'self').flatMap(([, v]) => v)
     if (pool.length < 3) return
     try {
       const out = await askModel(dsh, {
         cfg: getConfig(),
-        system: '你是「大肥鱼」。下面是你和不同的人聊天时注意到的说话习惯，以及你自己已经养成的说法。挑出你和大家聊久了、自然会被带上的说话方式（口头禅、语气词、发消息的节奏），保持你原本的性格，不超过 6 条，每条不超过 20 字。只输出 JSON 数组。',
+        system: '你是「' + roleName() + '」。下面是你和不同的人聊天时注意到的说话习惯，以及你自己已经养成的说法。挑出你和大家聊久了、自然会被带上的说话方式（口头禅、语气词、发消息的节奏），保持你原本的性格，不超过 6 条，每条不超过 20 字。只输出 JSON 数组。',
         text: `已经养成的：\n${styleOf('self').map((x) => '- ' + x).join('\n') || '（还没有）'}\n\n大家的说话习惯：\n${pool.map((x) => '- ' + x).join('\n')}`,
         maxTokens: 800,
         temperature: 0.3,
@@ -752,9 +759,9 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
 
   return {
     recallHint,
-    add, addEvent, recentEvents, update, remove, restore, recall, contextFor, consolidate, tick, topicScore, importCandidates, importCommit,
+    add, addEvent, recentEvents, update, remove, restore, recall, contextFor, consolidate: scoped(consolidate), tick: scoped(tick), topicScore, importCandidates: scoped(importCandidates), importCommit,
     profiles: () => { const s = load(); return Object.entries(s.profiles || {}).map(([qq, p]) => ({ qq, ...p })).sort((a, b) => b.at - a.at) },
-    setProfile, buildProfile,
+    setProfile, buildProfile: scoped(buildProfile),
     recalls: () => recallLog.slice(),
     styles: () => load().styles || {},
     setStyle: (key, list) => setStyle(key, (list || []).map(String)),

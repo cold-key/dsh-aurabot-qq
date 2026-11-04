@@ -22,7 +22,7 @@ export default {
       return false
     })
     const bili = createBili({ getConfig: api.config, hub, memory: api.lazy('memory'), log: api.log, dsh: api.dsh,
-      learning: () => api.use('social-learning'), onObserved: (batch) => api.emit('browse/observed', batch) })
+      learning: () => api.use('social-learning'), personality: () => api.use('personality'), onObserved: (batch) => api.emit('browse/observed', batch) })
     api.every(60_000, () => bili.tick(), '刷B站')
 
     // 看视频谁发的链接都能看，评论要主人开口

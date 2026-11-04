@@ -35,7 +35,7 @@ const emptyState = () => ({
   dmSeen: [], dmInit: false, lastDmCheck: 0, // 主人抖音私信：看过的消息 id；第一次看时旧消息只记下不回
 })
 
-export function createDouyin({ getConfig, setOwner, hub, memory, log, site: injected, now = Date.now, wait, learning = () => null, onObserved = () => {} } = {}) {
+export function createDouyin({ getConfig, setOwner, hub, memory, log, site: injected, now = Date.now, wait, learning = () => null, personality = () => null, onObserved = () => {} } = {}) {
   const cfg = () => getConfig().douyin
   const sleep = wait || ((ms) => new Promise((r) => setTimeout(r, ms)))
   const site = injected || createSite({ browser: createBrowser({ profileDir: dataDir('douyin', 'edge-profile'), browserPath: () => cfg().browserPath, log }), log })
@@ -48,7 +48,7 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
   }
   const save = (s) => writeJson(file(), s)
   const record = (s, item) => { s.history.unshift({ at: now(), ...item }); s.history = s.history.slice(0, 40) }
-  const owner = () => getConfig().ownerName || '主人'
+  const owner = () => personality()?.current() ? '朋友' : getConfig().ownerName || '主人'
   // 主人的抖音号核对过、面板里的输入也没改过，才能真·@
   const ownerDy = () => {
     const o = cfg().owner || {}
@@ -232,7 +232,9 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
     for (let i = 0; i < 4 && out.length < want; i++) {
       const page = await site.feed(s.refreshIndex)
       s.refreshIndex = (s.refreshIndex % 50) + 1
-      const ranked = learning()?.modeFor('douyin') === 'structured' ? learning().rank(page, (v) => [v.title, v.category, ...(v.tags || [])].join(' ')) : page
+      const textOf = (v) => [v.title, v.category, ...(v.tags || [])].join(' ')
+      const learned = learning()?.modeFor('douyin') === 'structured' ? learning().rank(page, textOf) : page
+      const ranked = personality()?.rank(learned, textOf) || learned
       for (const v of ranked) if (!seen.has(v.awemeId) && !out.some((x) => x.awemeId === v.awemeId) && out.length < want) out.push(v)
     }
     return out
@@ -313,7 +315,10 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
 
         if (d.like === true && liked < likeLeft) {
           const w = await doWrite(s, 'like', meta, () => site.like(v.awemeId), { waitGap: true })
-          if (w.ok && !w.already) liked++
+          if (w.ok && !w.already) {
+            liked++
+            if (!w.dryRun && !force && !ownerAsked) onObserved({ ...douyinObservation([looked[i]]), voluntary: true })
+          }
         }
         // 模型自己打的 @xxx 是假 @（对方收不到通知），去掉；要 @ 主人走下面的真·@
         const comment = clip(String(d.comment || '').replace(/@\S+\s*/g, ''), 100)

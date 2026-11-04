@@ -26,7 +26,7 @@ export function planDiaryTimes({ timesPerDay, windowStart, windowEnd, minGapMinu
   return Array.from({ length: n }, (_, i) => a + Math.floor((span / n) * (i + 0.5)))
 }
 
-export function createQzone({ getConfig, onebot, hub, log, onDiary, pickImage }) {
+export function createQzone({ getConfig, onebot, hub, log, onDiary, pickImage, personality = () => null }) {
   const file = () => dataDir('diary.json')
   const state = () => readJson(file(), () => ({ plan: { day: '', times: [], done: [] }, history: [] }))
   const save = (s) => writeJson(file(), s)
@@ -134,6 +134,7 @@ export function createQzone({ getConfig, onebot, hub, log, onDiary, pickImage })
 
   function todayExcerpt(maxLines = 60) {
     const lines = hub.chatLogOf(dayKey())
+      .filter((l) => !personality()?.current() || l.profileId === personality().current().id)
       .filter((l) => !String(l.chatId).startsWith('system:'))
       .slice(-maxLines)
       .map((l) => `${new Date(l.t).toTimeString().slice(0, 5)} ${l.who === 'bot' ? '我' : l.who}：${l.text}`)
@@ -153,7 +154,7 @@ export function createQzone({ getConfig, onebot, hub, log, onDiary, pickImage })
       const prompt = [
         `【写空间日记】现在是 ${now.getMonth() + 1} 月 ${now.getDate()} 日 ${now.toTimeString().slice(0, 5)}。`,
         excerpt ? `今天你在 QQ 上的聊天片段（「我」是你自己）：\n${excerpt}` : '今天还没怎么聊天。',
-        `请用你自己的口吻写一条 QQ 空间说说，第一人称，${cfg.minChars}~${cfg.maxChars} 个字，像真人随手发的动态：可以写今天发生的小事、心情、想吃的白米饭。`,
+        `请用你自己的口吻写一条 QQ 空间说说，第一人称，${cfg.minChars}~${cfg.maxChars} 个字。` + (personality()?.current() ? '只写真实记录中的经历或明确的当前想法，不虚构吃饭、出门、完成操作；旧角色的经历不是你的经历。' : '像真人随手发的动态：可以写今天发生的小事、心情、想吃的白米饭。'),
         '不要分条、不要 |||、不要 <voice>/<sticker> 标记、不要 Markdown、不要加引号，只输出说说正文本身。',
       ].join('\n\n')
       let text = await hub.runSystemTurn('diary', '空间日记', prompt)

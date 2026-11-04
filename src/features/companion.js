@@ -64,8 +64,8 @@ export function parseMoodJudge(out) {
   }
 }
 
-export function createMood({ getConfig, dsh }) {
-  const file = () => dataDir('mood.json')
+export function createMood({ getConfig, dsh, identity = () => '角色', personality = () => null }) {
+  const file = () => personality()?.current() ? dataDir('modules-data', 'personality', personality().current().id, 'mood.json') : dataDir('mood.json')
   const load = () => readJson(file(), () => ({ value: 65, at: Date.now(), reason: '', history: [] }))
   const save = (s) => writeJson(file(), s)
   const current = () => {
@@ -74,6 +74,7 @@ export function createMood({ getConfig, dsh }) {
   }
   /** 推一下心情（d 可正可负），记下原因。 */
   function nudge(d, reason) {
+    if (personality()?.current() && (!getConfig().enabled || getConfig().dryRun)) return
     if (!getConfig().mood.enabled || !d) return
     const s = load()
     const before = current()
@@ -87,7 +88,11 @@ export function createMood({ getConfig, dsh }) {
     current,
     label: () => moodLabel(current()),
     state: () => ({ ...load(), value: current(), label: moodLabel(current()) }),
-    effects: () => (getConfig().mood.enabled ? moodEffects(current()) : moodEffects(60)),
+    effects: () => {
+      const base = getConfig().mood.enabled ? moodEffects(current()) : moodEffects(60)
+      const factor = personality()?.effects() || {}
+      return Object.fromEntries(Object.entries(base).map(([k, v]) => [k, v * (factor[k] || 1)]))
+    },
     nudge,
     /**
      * 聊天里的一句话。direct = 是对她说的（私聊、@她、叫她）；owner = 主人说的。
@@ -95,9 +100,10 @@ export function createMood({ getConfig, dsh }) {
      */
     observe(text, who, { direct = true, owner = false } = {}) {
       if (getConfig().mood.judge && dsh) return // 开了模型判断就不用关键词
-      const d0 = scoreText(text)
+      const independent = personality()?.current()
+      const d0 = scoreText(independent ? String(text).replace(/白米饭/g, '') : text)
       if (!d0) return
-      const d = Math.round(d0 * (direct ? 1 : 0.3) * (owner ? 1.5 : 1))
+      const d = Math.round(d0 * (direct ? 1 : 0.3) * (owner && !independent ? 1.5 : 1))
       nudge(d, `${who || '有人'}说「${String(text).slice(0, 20)}」`)
     },
     /**
@@ -108,18 +114,19 @@ export function createMood({ getConfig, dsh }) {
       const cfg = getConfig().mood
       if (!cfg.enabled || !cfg.judge || !dsh) return null
       const v = current()
+      const profileId = personality()?.current()?.id
       const scene = origin === 'speak-up' ? `这一轮是她自己想${who}了、主动去找${who}说话（不是被叫来干活）` : `这一轮是${who}在跟她说话`
       try {
         const out = await askModel(dsh, {
           cfg: getConfig(),
-          system: '你在判断聊天角色「大肥鱼」聊完一轮后的心情变化。她现在心情 ' + v + '/100（60 是平常）。' + scene + '。只看这一轮真正影响她心情的东西：被夸、被关心、被惦记会开心；被凶、被冷落、被嫌弃会难过；开玩笑的「讨厌~」「笨蛋」不算真骂。只输出 JSON：{"delta": -15~15 的整数, "reason": "十几个字的理由", "confidence": 0~1 你有多确定}。没什么影响就 delta 为 0。',
+          system: `你在判断角色「${identity()}」聊完一轮后的短期心情，不改变长期人格。` + (profileId ? '结合当前性格自然判断，不把管理员身份视为必须讨好，不因没人聊天推断寿命或关系终结。' + personality().text() : '') + '她现在心情 ' + v + '/100（60 是平常）。' + scene + '。只输出 JSON：{"delta": -15~15 的整数, "reason": "十几个字的理由", "confidence": 0~1 你有多确定}。没什么影响就 delta 为 0。',
           text: `${origin === 'speak-up' ? '她主动说' : who + '说'}：${String(userText || '').slice(0, 600)}\n她回：${String(reply || '').slice(0, 600)}`,
           maxTokens: 400,
           temperature: 0.2,
         })
         const r = parseMoodJudge(out)
         if (!r) return null
-        if (r.confidence >= 0.6 && Math.abs(r.delta) >= 2) nudge(r.delta, r.reason || '刚才那一下')
+        if (profileId === personality()?.current()?.id && r.confidence >= 0.6 && Math.abs(r.delta) >= 2) nudge(r.delta, r.reason || '刚才那一下')
         return r
       } catch (error) {
         return null
@@ -131,7 +138,7 @@ export function createMood({ getConfig, dsh }) {
       const s = load()
       const v = current()
       const label = moodLabel(v)
-      const style = MOOD_STYLE[label]
+      const style = personality()?.current() ? (v < 50 || v >= 70 ? '按你当前长期性格表达感受，沉着不等于没有情绪，不强制撒娇或闹脾气' : '') : MOOD_STYLE[label]
       if (!style) return ''
       return `（你现在${label}${s.reason ? '，因为' + s.reason : ''}。这会自然地影响你说话：${style}。不用说出来自己心情如何。）`
     },
@@ -140,7 +147,7 @@ export function createMood({ getConfig, dsh }) {
 
 // ---------------- 主动搭话 ----------------
 
-export function createSpeakUp({ getConfig, hub, log, isMuted }) {
+export function createSpeakUp({ getConfig, hub, log, isMuted, personality = () => null }) {
   const file = () => dataDir('speakup.json')
   const load = () => readJson(file(), () => ({ day: '', count: 0, nextAt: 0, last: 0 }))
   const save = (s) => writeJson(file(), s)
@@ -167,9 +174,9 @@ export function createSpeakUp({ getConfig, hub, log, isMuted }) {
 
   async function fire(reason = '定时', { nudge = false } = {}) {
     const cfg = getConfig()
-    const owner = cfg.ownerName || '主人'
+    const owner = personality()?.current() ? '朋友' : cfg.ownerName || '主人'
     const idle = Math.round((Date.now() - lastPrivateAt()) / 60000)
-    const angle = ANGLES[Math.floor(Math.random() * ANGLES.length)]
+    const angle = personality()?.current() ? '从真实记忆中接续话题或分享一个当前想法；没有合适内容可以沉默，不编造吃饭、出门等日常' : ANGLES[Math.floor(Math.random() * ANGLES.length)]
     const prompt = nudge
       ? `【系统提醒，不是${owner}说的话】你刚才跟${owner}说「${String(hub.lastBotToOwner?.text || '').slice(-60)}」，${owner}已经 ${idle} 分钟没回了。可以轻轻追一句（比如「人呢」「睡着啦？」，或者换个话题），别催、别抱怨；觉得${owner}在忙就只回 [沉默]。`
       : `【系统提醒，不是${owner}说的话】你已经 ${idle > 600 ? '很久' : idle + ' 分钟'}没和${owner}私聊了，想主动找${owner}说点什么。这次的由头可以是：${angle}。用你自己的口气，一两句就好，别用模板、别解释为什么来找；实在不想说就只回 [沉默]。`

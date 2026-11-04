@@ -221,6 +221,8 @@ api.on('reply/items', (items) => [...items, { kind: 'text', value: '—— 大�
 | `module/start` / `module/stop` | 模块 id | 有模块启动 / 停下 |
 | `song/sung` | `{ title, chatId }` | 翻唱模块唱完一首 |
 | `browse/observed` | `{ platform, origin, items }` | 浏览完成后通知学习模块，只入队、不等待模型；目前校验 B 站与抖音来源，格式见下文 |
+| `experience/recorded` | `Experience`，见类型声明 | 可信适配器上报真实经历；人格模块检查档案、来源、去重及模拟状态 |
+| `learning/processed` | `{ batchId, platform, sourceIds, records }` | 浏览提炼成功后的引用索引；它不是另一份独立经历，不重复计票 |
 | 你自己 `api.emit` 的 | 随你 | 模块之间互相通知 |
 
 `msg` 长这样（`text` 是纯文字：@ 她的那段去掉了，@ 别人的写成「@昵称」，图片 / 表情 / 文件写成「[图片]」这类占位；引用的那条消息的文字**不在**里面，要的话用 `replyId` 去 `api.onebot('get_msg', { message_id })` 拿）：
@@ -320,6 +322,7 @@ return function Panel({ settings, save, toast }) {
 | `speakup` | 主动搭话 | `fire(原因)` `state()` |
 | `bili` | B 站 | `watch(链接)` `comment(链接, 文字)` `run()` `checkReplies()` `account()` `state()` |
 | `social-learning` | 浏览学习 | `observe(batch)` `modeFor(platform)` `recall(query, opts?)` `prompt(query, opts?)` `interests()` `rank(items, textOf)` `materials()` `status()`；模块关闭时 `api.use` 返回 null |
+| `personality` | 人格成长 | `current()` `text()` `name()` `relationship(chat)` `effects()` `observe(event)` `topics()` `ownerInterests()` `rank(items, textOf)` `materials()` `status()`；默认关闭成长，需创建并显式启用档案 |
 | `douyin` | 刷抖音 | `run` `browse` `watch` `likeVideo` `commentVideo` `confirmOwner` `account` `loginStep` `showWindow` `state`；工具 `douyin_watch` / `douyin_browse` / `douyin_like` / `douyin_comment` |
 | `song` | 翻唱 | `request({ song, pitch, chatId })` `search(关键词)` `status()` `install()` |
 
@@ -350,6 +353,26 @@ api.emit('browse/observed', {
 学习队列在两平台和模块热重载之间串行共享，每个批次最多一次额外提炼。`api.ask` 新增可选 `{ maxAttempts: 1, signal }`：前者禁止思考强度不兼容引起的自动重试，后者向宿主传递尽力取消信号。默认调用方式保持原来的兼容重试。配置切换或卸载会使旧结果失效；若适配器忽略取消，新学习请求会等待旧物理请求退出。
 
 管理页面位于「人设 → 浏览学习」，接口为 `/aurabot/api/learning/*`，修改类接口要求 POST JSON。完整字段、时效和验证说明见仓库 [docs/SOCIAL-LEARNING.md](../../docs/SOCIAL-LEARNING.md)。
+
+### 独立人格与真实经历
+
+`core.personas.base()` 读取当前基础卡，`core.personas.current()` 与聊天变量 `aurabot_persona` 共用当前有效人格解析，包含成长状态及既有 `persona` 过滤器。读取过程同步，不调用模型；重入过滤器时返回未过滤的当前人格，防止扩展递归。`core.personas.name()` 返回当前名字，`core.personas.address()` 返回适合当前模式的管理员称呼。关系上下文仅注入相应私聊，不加入公共人格。
+
+`api.use('personality')?.current()` 仅在成长配置已启用且当前基础卡匹配所选档案时返回档案。不要直接修改返回对象；人工校订、提案审批与回滚使用管理面板的 POST JSON 接口，并携带当前 `revision`。不要把审阅接口包装成可由聊天模型调用的工具。
+
+只有实际读取、真实交互或已确认的执行结果才能上报 `experience/recorded`。示例：
+
+```js
+api.emit('experience/recorded', {
+  source: 'tool', originId: receipt.id, status: 'success', actor: 'agent',
+  text: '操作收到了真实成功回执', simulated: false,
+  voluntary: false, // 用户要求的操作不直接证明角色喜好
+})
+```
+
+核心已包装模块工具的实际返回值，B 站和抖音也已接入，扩展不要再次把同一来源转述为独立证据。聊天 `activity` 新增 `eventId/at/simulated`，另有 `kind: 'receipt'` 表示网关发送回执；`kind: 'out'` 保持原语义，不能仅凭它认定已成功发送。
+
+人格反思每日最多一次，失败、超时和模型预览也计入，和浏览提炼额度分开。小变化经程序限幅后自动生效，重大身份、使命、核心价值及关系类别变化待审阅。模块不会自主增加能力、发送次数、QQ资料权限或更改管理员。详见 [人格成长使用说明](../../docs/PERSONALITY-EVOLUTION.md)。
 
 ## 替换内置模块
 

@@ -3,6 +3,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { normalize } from '../src/core/config.js'
+import { newProfile, YINGBAO } from '../src/personality/engine.js'
 
 function harness(reply) {
   const states = [], refs = [], effects = [], calls = []
@@ -13,7 +14,7 @@ function harness(reply) {
     useRef: (v) => { const i = refCursor++; return refs[i] ||= { current: v } },
     useCallback: (fn) => fn, useEffect: (fn) => effects.push(fn) }
   const source = readFileSync(new URL('../client/client.js', import.meta.url), 'utf8')
-    .replace('exports.AurabotPage = AurabotPage', 'exports.Learning = Learning; exports.LearningRecord = LearningRecord; exports.AurabotPage = AurabotPage')
+    .replace('exports.AurabotPage = AurabotPage', 'exports.Growth = Growth; exports.Learning = Learning; exports.LearningRecord = LearningRecord; exports.AurabotPage = AurabotPage')
   new Function('window', 'fetch', 'setInterval', 'clearInterval', source)(
     { __ModuleLoader__: { load: (r) => { registration = r } } },
     async (url, options) => { calls.push({ url, ...options }); return { json: async () => reply(url, options) } }, () => 1, () => {})
@@ -77,4 +78,41 @@ test('面板接口不可用时展示错误，保留配置和空库视图', async
   const tree = app.render('Learning', props)
   assert.match(text(tree), /学习模块没有运行/)
   assert.ok(nodes(tree).some((n) => n.props.role === 'alert'))
+})
+
+test('人格面板：出生预览明确创建与启用分开，启用保留其他未保存配置', async () => {
+  const profile = newProfile(YINGBAO, '10000001', Date.now())
+  const status = { ok: true, seed: YINGBAO, config: { dailyMax: 1 }, quota: { count: 0 }, active: false, busy: false, newEvents: 0, profile: null, profiles: [{ id: profile.id, name: '萤宝', revision: 1 }], history: [] }
+  const app = harness((url) => url.endsWith('/personality/status') ? status : { ok: true, message: '已完成', personaId: profile.personaId })
+  let draft = normalize({ ownerName: '未保存的称呼' })
+  const props = { draft, setDraft: (d) => { draft = d }, toast: () => {} }
+  app.render('Growth', props); await app.effects[0](); await new Promise((r) => setImmediate(r))
+  const tree = app.render('Growth', props)
+  assert.match(nodes(tree).find((n) => n.type === 'textarea' && n.props.value === YINGBAO.selfView).props.value, /生命有限/)
+  await find(tree, '创建独立出生档案（不调用模型）').props.onClick()
+  const creation = app.calls.find((r) => r.url.endsWith('/personality/create'))
+  assert.equal(creation.method, 'POST'); assert.equal(JSON.parse(creation.body).seed.name, '萤宝')
+  assert.equal(app.calls.some((r) => r.url.endsWith('/personality/activate')), false)
+  await find(tree, '选择并启用').props.onClick()
+  assert.equal(draft.persona.current, profile.personaId); assert.equal(draft.ext.personality.enabled, true)
+  assert.equal(draft.ownerName, '未保存的称呼')
+})
+
+test('人格面板：重大提案审批和回滚均携带当前版本，模型预览标记不应用', async () => {
+  const profile = newProfile(YINGBAO, '10000001', Date.now())
+  profile.revision = 12
+  profile.proposals.push({ id: 'proposal', path: 'identity.mission', before: '原使命', after: '新使命', reason: '多日经历', evidence: [], outcome: 'pending', baseRevision: 12 })
+  profile.snapshots.push({ revision: 11, reason: '原状态', at: Date.now() })
+  const status = { ok: true, seed: YINGBAO, config: { dailyMax: 1 }, quota: { count: 0 }, active: true, busy: false, newEvents: 8, profile, profiles: [], history: [], publicText: '萤宝' }
+  const app = harness((url) => url.endsWith('/personality/status') ? status : { ok: true, message: '完成', candidates: [] })
+  const props = { draft: normalize({}), setDraft: () => {}, toast: () => {} }
+  app.render('Growth', props); await app.effects[0](); await new Promise((r) => setImmediate(r))
+  const tree = app.render('Growth', props)
+  await find(tree, '批准').props.onClick()
+  const approval = JSON.parse(app.calls.find((r) => r.url.endsWith('/personality/review')).body)
+  assert.deepEqual(approval, { revision: 12, id: 'proposal', approve: true })
+  await find(tree, '恢复此版本状态').props.onClick()
+  assert.deepEqual(JSON.parse(app.calls.find((r) => r.url.endsWith('/personality/rollback')).body), { revision: 12, targetRevision: 11 })
+  await find(tree, '模型预览（占今日额度，不应用）').props.onClick()
+  assert.equal(JSON.parse(app.calls.find((r) => r.url.endsWith('/personality/reflect')).body).preview, true)
 })

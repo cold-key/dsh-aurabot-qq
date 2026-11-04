@@ -9,8 +9,11 @@ export default {
   defaults: DEFAULT_LEARNING,
   files: ['social-learning/engine.js', 'social-learning/store.js', 'social-learning/service.js'],
   setup(api) {
-    const service = createSocialLearning({ file: dataDir('modules-data', 'social-learning', 'state.json'), getConfig: api.config,
-      ask: (opts) => api.ask(opts), persona: () => api.core.personas.current(), mood: () => api.use('mood'), log: api.log })
+    const service = createSocialLearning({ file: dataDir('modules-data', 'social-learning', 'state.json'), getConfig: () => {
+      const c = api.config(), p = api.use('personality')
+      return p?.current() ? { ...c, group: { ...c.group, interests: p.ownerInterests() } } : c
+    },
+      ask: (opts) => api.ask(opts), persona: () => api.core.personas.current(), mood: () => api.use('mood'), onProcessed: (b) => api.emit('learning/processed', b), log: api.log })
     api.onDispose(service.dispose)
     api.on('browse/observed', (batch) => service.observe(batch))
     const signature = (cfg) => JSON.stringify([learningConfig(cfg), cfg.enabled, cfg.dryRun, cfg.ownerQQ, cfg.model, cfg.persona])

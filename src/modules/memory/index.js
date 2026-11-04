@@ -14,7 +14,7 @@ export default {
   files: ['features/memory.js'],
   setup(api) {
     const { hub, http } = api.core
-    const memory = createMemoryStore({ dsh: api.dsh, getConfig: api.config, hub, log: api.log })
+    const memory = createMemoryStore({ dsh: api.dsh, getConfig: api.config, hub, log: api.log, identity: () => api.core.personas.name(), personality: () => api.use('personality') })
 
     api.context(({ chat, sessionId }) => (chat.kind === 'system' ? '' : memory.contextFor(chat, sessionId)))
     // #79：随消息变化的相关记忆放在「交给她的内容」里，不放进每轮都会追加的运行时上下文快照

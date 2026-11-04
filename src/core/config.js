@@ -6,6 +6,7 @@ import { LEVELS, PROFILE_PERM_KEYS, PROFILE_PERM_LEVELS, profilePermDefault } fr
 import { normalizeChatModels } from '../chat/chat-model.js'
 import { DIARY_AUDIENCES } from '../features/qzone-audience.js'
 import { DEFAULT_LEARNING, normalizeLearning } from '../social-learning/engine.js'
+import { DEFAULT_PERSONALITY, normalizePersonality } from '../personality/engine.js'
 
 export const DEFAULTS = {
   enabled: false, // 总开关：关着一句都不发
@@ -213,7 +214,7 @@ export const DEFAULTS = {
   // useBuiltin：自己写了同名模块，但想先用回内置的
   modules: {},
   safeMode: false, // 安全模式：自己写的模块一个都不加载（排查问题用）
-  ext: { 'social-learning': DEFAULT_LEARNING }, // 模块设置；浏览学习默认保留原行为
+  ext: { 'social-learning': DEFAULT_LEARNING, personality: DEFAULT_PERSONALITY }, // 模块设置；人格成长默认关闭
   // 联动：让别的程序、DSH 里别的会话和插件也能用她
   bridge: {
     dshTools: false, // DSH 里别的会话（比如你平时写代码的会话）能用工具让她发 QQ、查记忆
@@ -438,6 +439,7 @@ export function normalize(raw) {
   }
   if (!isObj(c.ext)) c.ext = {}
   c.ext['social-learning'] = normalizeLearning(c.ext['social-learning'])
+  c.ext.personality = normalizePersonality(c.ext.personality)
   for (const k of Object.keys(c.ext)) if (!isObj(c.ext[k])) delete c.ext[k] // 传 null = 删掉这个模块的设置
   c.safeMode = bool(c.safeMode, false)
   c.bridge.dshTools = bool(c.bridge.dshTools, false)

@@ -517,6 +517,7 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
       { id: 'pet', label: '桌宠' },
       { id: 'mood', label: '心情与记忆', flag: 'mood.enabled' },
       { id: 'learning', label: '浏览学习' },
+      { id: 'growth', label: '人格成长' },
       { id: 'song', label: '翻唱', flag: 'song.enabled' },
       { id: 'bili', label: 'B站', flag: 'bili.enabled' },
       { id: 'douyin', label: '抖音', flag: 'douyin.enabled' },
@@ -528,6 +529,7 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
     // 内置标签页属于哪个模块：模块都没在跑就不显示这一页
     const TAB_MODS = { learning: ['social-learning'], voice: ['voice'], stickers: ['stickers'], imagegen: ['imagegen'], diary: ['diary', 'qzone-social'], speakup: ['speakup', 'purpose'], pet: ['pet'], mood: ['mood', 'memory'], song: ['song'], bili: ['bili'], douyin: ['douyin'], heybox: ['heybox'] }
     const modOn = (st, id) => (st.modules || []).some((m) => m.id === id && m.running)
+    TAB_MODS.growth = ['personality']
 
     // 两层导航：上面一排是分组，下面一排是这组里的页面；每组记住上次看的那页，Alt+K 查找功能
     // （分组导航的思路来自社区贡献的「导航布局」扩展，这里改成面板自己实现）
@@ -539,12 +541,14 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
       { id: 'system', label: '系统', icon: 'M4 7h9M17 7h3M4 12h3M11 12h9M4 17h11M19 17h1M15 5v4M9 10v4M17 15v4', tabs: ['connect', 'model', 'access', 'local', 'modules', 'logs'] },
     ]
     // 自己写的模块：名字像逛平台的放「平台」，其余放「系统」（排在「日志」前面）
+    NAV_GROUPS.find((g) => g.id === 'self').tabs.push('growth')
     const PLATFORM_EXT = /逛|刷|B站|抖音|小红书|闲鱼|淘宝|微博|知乎|贴吧|快手|触站|小黑盒/
     const navGroupOf = (t) => NAV_GROUPS.find((g) => g.tabs.includes(t.id)) || (t.ext && PLATFORM_EXT.test(t.label) ? NAV_GROUPS[3] : NAV_GROUPS[4])
     const navOrder = (g, t) => { const i = g.tabs.indexOf(t.id); return i >= 0 ? i : g.tabs.length - (g.tabs.includes('logs') ? 1.5 : 0) }
     const NAV_ALIAS = {
       overview: '首页 状态', connect: 'qq 网关 snowluma onebot 登录 工作区', persona: '人设 性格 设定 头像', access: '主人 白名单 权限 群管 改资料',
       learning: '学习 知识 热梗 表达 兴趣 浏览 来源',
+      growth: '人格 萤宝 成长 身份 反思 独立 关系 版本 回滚',
       group: '群聊 插话 合并', model: 'ai 大模型 视觉 思考强度', voice: '语音 tts 说话 音色 edge', stickers: '表情 小黄脸 gif 商城表情',
       imagegen: '画图 图片', diary: '空间 说说 日记', speakup: '搭话 主动', mood: '心情 记忆', song: '唱歌 翻唱 rvc 点歌',
       bili: 'b站 bilibili 视频', douyin: '抖音 短视频 私信', pet: '桌宠 宠物 悬浮窗 气泡 electron', local: '本地 接口 sd sovits', modules: '扩展 模块 插件', logs: '日志 报错',
@@ -1004,7 +1008,7 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
           h(Btn, { kind: 'ghost', onClick: () => { const id = 'persona-' + Date.now().toString(36); setEdit({ id, name: '新人格', tags: '', secs: splitPersona('你是……\n\n【打字习惯】\n- 短句、口语，一次只说一两句。') }); setSel(id); setDirty(true); setPending({}) } }, '＋ 新建人格'),
           h(AvatarCard, { st, toast, reload }),
         ),
-        edit ? h(Card, { title: '编辑人格', desc: '人格写在系统提示词的最前面，按节写更好改。保存后，大肥鱼下一轮回复起就按新的来。',
+        edit ? h(Card, { title: '编辑人格', desc: st.personality?.active && edit.id === current ? '当前卡是出生快照。成长状态请到「人格成长」查看和校订；直接保存此卡会关闭成长覆盖，采用你的人工内容，成长档案仍保留。' : '人格写在系统提示词的最前面，保存后下一轮起使用新内容。',
           right: h('div', { className: 'ab-flex' },
             edit.id !== current ? h(Btn, { small: true, onClick: async () => { const r = await post('/persona/use', { id: edit.id }); toast(r.message); refresh(); reload() } }, '设为当前') : null,
             edit.id !== current ? h(Btn, { small: true, kind: 'danger', onClick: async () => { if (!confirm('删掉这个人格？')) return; const r = await post('/persona/delete', { id: edit.id }); if (r.ok) { setList(r.list); setSel(current) } else toast(r.message) } }, '删除') : null) },
@@ -3310,6 +3314,90 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
         h('small', { className: 'ab-muted' }, `到期：${new Date(record.expiresAt).toLocaleDateString()}${record.pinned ? '（固定期间保留）' : ''} · 提供给聊天 ${record.uses} 次；召回不会延长有效期`))
     }
 
+    function Growth({ draft, setDraft, toast }) {
+      const f = useField(draft, setDraft)
+      const [data, setData] = useState(null)
+      const [seed, setSeed] = useState(null)
+      const [edit, setEdit] = useState(null)
+      const [preview, setPreview] = useState(null)
+      const [legacy, setLegacy] = useState([])
+      const [checked, setChecked] = useState([])
+      const [chatId, setChatId] = useState('')
+      const [error, setError] = useState('')
+      const requestId = useRef(0)
+      const refresh = useCallback(async () => {
+        const id = ++requestId.current
+        const r = await get('/personality/status')
+        if (id !== requestId.current) return
+        if (!r.ok) { setError(r.message || '人格模块不可用'); return }
+        setData(r); setSeed((s) => s || r.seed); setError('')
+      }, [])
+      useEffect(() => { refresh(); const t = setInterval(refresh, 10000); return () => { requestId.current++; clearInterval(t) } }, [refresh])
+      const act = async (path, body = {}) => {
+        const r = await post('/personality/' + path, { revision: data?.profile?.revision, ...body })
+        toast(r.message || (r.ok ? '已完成' : '操作失败'), r.ok ? 'ok' : 'err')
+        if (r.ok) { await refresh(); if (path === 'activate') setDraft(setPath(setPath(draft, 'persona.current', r.personaId), 'ext.personality.enabled', true)) }
+        return r
+      }
+      const p = data?.profile
+      const identityFields = (value, setValue) => ['name', 'selfView', 'mission'].map((k) => h(Row, { key: k, label: { name: '名字', selfView: '自我认知', mission: '使命' }[k] },
+        h('textarea', { className: 'ab-textarea', value: value[k] || '', onChange: (e) => setValue({ ...value, [k]: e.target.value }) })))
+      const labels = { composure: '沉着', optimism: '乐观', courage: '勇气', curiosity: '好奇', sociability: '社交主动性', assertiveness: '表达立场' }
+      return h('div', null,
+        h(Card, { title: '人格成长', desc: '真实经历推动缓慢成长。日常小变化自动生效，身份、核心价值、使命和重大关系变化先审阅。配置沿用面板底部保存；档案和审阅操作立即生效。' },
+          h(Row, { label: '启用成长模式' }, f.sw('ext.personality.enabled')),
+          h(Row, { label: '冻结成长', hint: '冻结反思和自动变化，采集开关仍可独立控制' }, f.sw('ext.personality.paused')),
+          h(Row, { label: '采集新经历' }, f.sw('ext.personality.collect')),
+          h(Row, { label: '每日独立反思调用', hint: '0 或 1，与浏览学习额度分开；失败和模型预览也计入' }, f.num('ext.personality.dailyMax', { min: 0, max: 1 })),
+          h(Row, { label: '反思起始小时（北京时间）' }, f.num('ext.personality.reflectHour', { min: 0, max: 23 })),
+          h(Row, { label: '最少有效新经历' }, f.num('ext.personality.minEvents', { min: 8, max: 100 })),
+          h('p', { className: 'ab-muted' }, '试运行不采集或自动成长。长期人格不会因重启或时间流逝回到初始值。技术权限始终由配置决定。')),
+        error ? h('p', { role: 'alert', className: 'ab-note err' }, error) : null,
+        seed ? h(Card, { title: '出生档案预览', desc: '预填萤宝：冷静、乐观、勇敢、略酷；好朋友；珍惜时间，没有寿命倒计时。创建只保存档案，启用需另点按钮，不自动迁移旧经历。' },
+          ...identityFields(seed, setSeed),
+          h(Row, { label: '初始关系' }, h('input', { className: 'ab-input', value: seed.relationship || '', onChange: (e) => setSeed({ ...seed, relationship: e.target.value }) })),
+          ...Object.entries(labels).map(([k, label]) => h(Row, { key: k, label: '初始' + label }, h(Range, { min: 0, max: 1, step: 0.05, value: seed.traits?.[k] ?? 0.5, onChange: (v) => setSeed({ ...seed, traits: { ...seed.traits, [k]: v } }) }))),
+          h(Btn, { onClick: () => act('create', { seed }) }, '创建独立出生档案（不调用模型）')) : null,
+        data ? h(Card, { title: '档案与运行状态', right: h(Btn, { small: true, onClick: refresh }, '刷新') },
+          h('p', null, `当前${data.active ? '已启用' : '未生效'} · 今日调用 ${data.quota.count}/${data.config.dailyMax} · ${data.busy ? '旧请求尚未退出' : '空闲'} · 新经历 ${data.newEvents}`),
+          ...data.profiles.map((x) => h('div', { key: x.id, className: 'ab-row' }, h('span', null, `${x.name} · v${x.revision} · ${x.id}`), h(Btn, { small: true, onClick: () => act('activate', { id: x.id }) }, '选择并启用'))),
+          h(Btn, { onClick: async () => { const r = await act('reflect', { preview: true }); setPreview(r) } }, '模型预览（占今日额度，不应用）'),
+          h(Btn, { onClick: () => act('reflect') }, '现在反思（占今日额度）'),
+          preview ? h('pre', { style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' } }, JSON.stringify(preview.candidates || preview.message, null, 2)) : null,
+          h('details', null, h('summary', null, '运行记录'), ...data.history.map((x, i) => h('p', { key: i }, `${new Date(x.at).toLocaleString()} · ${x.outcome} · ${x.message}`)))) : null,
+        p ? h(Card, { title: `${p.state.identity.name} · 当前人格 v${p.revision}` },
+          h('p', null, p.state.identity.selfView), h('p', null, '使命：' + p.state.identity.mission),
+          h('pre', { style: { whiteSpace: 'pre-wrap' } }, Object.entries(p.state.traits).map(([k, v]) => `${labels[k] || k} ${v.toFixed(3)}`).join(' · ')),
+          h('p', null, '长期偏好：' + (p.state.preferences.map((r) => r.text).join('；') || '尚未形成')),
+          h('p', null, '当前看法：' + (p.state.beliefs.map((r) => r.text).join('；') || '尚未形成')),
+          h('p', null, '小目标：' + (p.state.goals.map((r) => r.text).join('；') || '尚未形成')),
+          h(Btn, { small: true, onClick: () => setEdit({ identity: clone(p.state.identity), revision: p.revision }) }, '人工校订身份与使命'),
+          edit ? h('div', null, ...identityFields(edit.identity, (identity) => setEdit({ ...edit, identity })),
+            h(Btn, { onClick: async () => { const r = await act('edit', edit); if (r.ok) setEdit(null) } }, '保存校订'),
+            h(Btn, { kind: 'ghost', onClick: () => setEdit(null) }, '取消')) : null,
+          h('details', null, h('summary', null, '冻结指定部分'), ...['identity', 'traits', 'style', 'preferences', 'beliefs', 'goals', ...Object.keys(labels).map((k) => 'traits.' + k)].map((path) => h(Row, { key: path, label: path }, h(Switch, { on: p.frozen.includes(path), onChange: (v) => act('freeze', { path, frozen: v }) })))),
+          h('details', null, h('summary', null, '公共人格快照（不含私密关系）'), h('pre', { style: { whiteSpace: 'pre-wrap' } }, data.publicText))) : null,
+        p ? h(Card, { title: '重大变化待审阅', desc: '批准前不会生效。审批绑定当前版本；可同时批准当前版本的多项变化，避免旧提案覆盖新修改。' },
+          h(Btn, { onClick: () => act('review', { ids: p.proposals.filter((c) => c.outcome === 'pending' && c.baseRevision === p.revision).map((c) => c.id), approve: true }) }, '批准本版本全部重大提案'),
+          ...p.proposals.slice().reverse().map((c) => h('div', { key: c.id, className: 'ab-card' }, h('b', null, c.path + ' · ' + c.outcome + (c.baseRevision !== p.revision ? '（版本已变化）' : '')),
+            h('pre', { style: { whiteSpace: 'pre-wrap' } }, JSON.stringify(c.before) + '\n→ ' + JSON.stringify(c.after)), h('p', null, c.reason),
+            ...c.evidence.map((e) => h('p', { key: e.id, className: 'ab-muted' }, `${new Date(e.at).toLocaleDateString()} ${e.source}：${e.text}`)),
+            c.outcome === 'pending' && c.baseRevision === p.revision ? h('div', null, h(Btn, { small: true, onClick: () => act('review', { id: c.id, approve: true }) }, '批准'), h(Btn, { small: true, onClick: () => act('review', { id: c.id, approve: false }) }, '拒绝')) : null))) : null,
+        p ? h(Card, { title: '成长记录与版本', desc: '回滚会恢复人格状态并保留真实经历，不会立即重学相同旧变化。' },
+          ...p.changes.slice(-20).reverse().map((c, i) => h('details', { key: i }, h('summary', null, `${new Date(c.at).toLocaleString()} ${c.path}：${JSON.stringify(c.before)} → ${JSON.stringify(c.after)}`), h('p', null, c.reason), ...c.evidence.map((e) => h('p', { key: e.id }, e.source + '：' + e.text)))),
+          ...p.snapshots.slice(-10).reverse().map((s) => h('div', { key: s.revision, className: 'ab-row' }, h('span', null, `v${s.revision} · ${s.reason}`), h(Btn, { small: true, onClick: () => act('rollback', { targetRevision: s.revision }) }, '恢复此版本状态'))),
+          h('details', null, h('summary', null, '最近真实经历'), ...p.events.slice().reverse().map((e) => h('p', { key: e.id }, `${e.source} · ${e.status} · ${e.voluntary ? '自主选择' : '接触或指定'}：${e.text}`)))) : null,
+        p ? h(Card, { title: '关系与迁移', desc: '关系按用户分别保存；公共人格不公开私人关系。旧自我经历不自动继承。' },
+          ...Object.entries(p.state.relationships).slice(0, 50).map(([uid, r]) => h('div', { key: uid, className: 'ab-row' }, h('span', null, `${uid} · ${r.kind} · 信任 ${r.trust.toFixed(2)} · 熟悉 ${r.familiarity.toFixed(2)}`),
+            h(Btn, { small: true, onClick: () => act('freeze', { path: 'relationships.' + uid, frozen: !p.frozen.includes('relationships.' + uid) }) }, p.frozen.includes('relationships.' + uid) ? '解除关系冻结' : '冻结关系'),
+            h(Btn, { small: true, kind: 'danger', onClick: () => act('forget-relationship', { userId: uid }) }, '清除关系及近期证据'))),
+          h(Btn, { onClick: async () => { const r = await get('/personality/legacy-memories'); setLegacy(r.items || []) } }, '查看可选择继承的人物事实'),
+          ...legacy.map((m) => h('label', { key: m.id, style: { display: 'block' } }, h('input', { type: 'checkbox', checked: checked.includes(m.id), onChange: (e) => setChecked(e.target.checked ? [...checked, m.id] : checked.filter((id) => id !== m.id)) }), m.text)),
+          legacy.length ? h(Btn, { onClick: () => act('import-memories', { ids: checked }) }, '只继承已勾选的人物事实') : null,
+          h(Row, { label: '单独重新开始一个会话', hint: '可选，会归档该会话并保留旧记录；填 private:QQ号 或 group:群号' }, h('input', { className: 'ab-input', value: chatId, onChange: (e) => setChatId(e.target.value) })),
+          h(Btn, { onClick: () => act('reset-chat', { chatId }) }, '归档此会话，下次独立开始')) : null)
+    }
+
     function Learning({ draft, setDraft, toast }) {
       const f = useField(draft, setDraft)
       const p = 'ext.social-learning.'
@@ -3465,13 +3553,14 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
       const curTab = tabs.find((t) => t.id === tab) || tabs[0]
       const body = curTab.ext ? ExtPage : {
         overview: Overview, connect: Connect, persona: Persona, access: Access, group: Group, model: Model, voice: Voice,
-        stickers: Stickers, imagegen: ImageGen, diary: Diary, speakup: SpeakUp, pet: PetPanel, mood: Mood, learning: Learning, song: Song, bili: Bili, douyin: Douyin, heybox: Heybox, local: LocalApi, modules: Modules, logs: Logs,
+        stickers: Stickers, imagegen: ImageGen, diary: Diary, speakup: SpeakUp, pet: PetPanel, mood: Mood, learning: Learning, growth: Growth, song: Song, bili: Bili, douyin: Douyin, heybox: Heybox, local: LocalApi, modules: Modules, logs: Logs,
       }[curTab.id] || Overview
       // 哪些标签有没保存的改动
       const TAB_KEYS = { connect: ['snowluma', 'botQQ'], access: ['ownerQQ', 'ownerName', 'ownerLevel', 'longTasks', 'profilePerms', 'allow'], group: ['group', 'merge', 'titleFilter'], model: ['model', 'chatModels'], voice: ['voice'], stickers: ['stickers'], imagegen: ['imageGen'], diary: ['diary', 'qzoneSocial'], speakup: ['speakUp'], pet: [], mood: ['mood', 'memory'], song: ['song'], bili: ['bili'], douyin: ['douyin'], heybox: ['heybox'], local: ['local'] }
       const tabDirty = (id) => {
         if (!dirty) return false
         if (id === 'learning') return JSON.stringify(draft.ext?.['social-learning']) !== JSON.stringify(cfg.ext?.['social-learning'])
+        if (id === 'growth') return JSON.stringify(draft.ext?.personality) !== JSON.stringify(cfg.ext?.personality)
         if (id.startsWith('ext:')) { const k = id.slice(4); return JSON.stringify((draft.ext || {})[k]) !== JSON.stringify((cfg.ext || {})[k]) }
         return (TAB_KEYS[id] || []).some((k) => JSON.stringify(draft[k]) !== JSON.stringify(cfg[k]))
       }
@@ -3480,8 +3569,8 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
           h('div', { className: 'ab-hero' },
             h('button', { type: 'button', className: 'ab-avatar-btn', title: '点击换头像', onClick: () => pickAvatar(toast, reload) }, h('img', { className: 'ab-avatar', src: avatarSrc(st), alt: '头像' }), h('span', { className: 'ab-avatar-tip' }, '换头像')),
             h('div', { className: 'ab-hero-main' },
-              h('h1', null, (st.onebot.login && st.onebot.login.nickname) || '大肥鱼'),
-              h('div', { className: 'ab-sub' }, 'QQ ' + cfg.botQQ + ' · ' + (persona ? persona.name : '默认人格') + ' · ' + st.mood.label),
+              h('h1', null, st.personality?.active ? st.personality.name : (st.onebot.login && st.onebot.login.nickname) || '大肥鱼'),
+              h('div', { className: 'ab-sub' }, 'QQ ' + cfg.botQQ + ' · ' + (st.personality?.active ? st.personality.name : persona ? persona.name : '默认人格') + ' · ' + st.mood.label),
               h('div', { className: 'ab-pills' },
                 h('span', { className: 'ab-pill' }, h('i', { className: cx('ab-dot', status.cls) }), status.text),
                 h('span', { className: 'ab-pill' }, 'SnowLuma ' + (st.snowluma.installed ? (st.snowluma.running ? '运行中' : '没启动') : '未安装')),

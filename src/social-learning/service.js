@@ -17,7 +17,7 @@ const SYSTEM = `你在帮助一个 QQ 角色整理刚刚浏览的外部资料。
 {"records":[{"kind":"knowledge或meme","title":"简短名称","text":"事实、观点或表达含义，主语及限定条件写清楚","aliases":[],"tags":[],"usage":"表达的适用情境","example":"表达的例句","avoid":"不合适的情境","topical":false,"confidence":0.8,"evidence":[{"sourceId":"输入内容id","quote":"输入text中的原文连续摘录，至少4字"}]}],"interests":[{"topic":"主题","sourceIds":["输入内容id"],"value":1,"confidence":0.8}],"mood":{"delta":0,"reason":"对角色的影响，不是对视频作者的情绪评分","confidence":0.8}}
 interests.value 只能是喜欢1或不喜欢-1。没形成感受时不输出兴趣。mood.delta 是 -2~2 的整数，无把握为0。不要输出来源网址，来源由程序绑定。`
 
-export function createSocialLearning({ file, getConfig, ask, persona = () => '', mood = () => null, log = {}, now = Date.now, timeoutMs = 180000 }) {
+export function createSocialLearning({ file, getConfig, ask, persona = () => '', mood = () => null, onProcessed = () => {}, log = {}, now = Date.now, timeoutMs = 180000 }) {
   const store = createLearningStore(file)
   const queue = []
   const queued = new Set()
@@ -174,6 +174,7 @@ export function createSocialLearning({ file, getConfig, ask, persona = () => '',
         return
       }
       apply(result, batch)
+      onProcessed({ batchId: batch.id, platform: batch.platform, sourceIds: batch.items.map((i) => i.id), records: result.records.map((r) => ({ kind: r.kind, title: r.title })) })
       rememberResult(batch, 'learned', `完成提炼：${result.records.length} 条候选结果`)
     } catch (error) {
       const interrupted = disposed || revision !== epoch || signal.aborted && !timedOut

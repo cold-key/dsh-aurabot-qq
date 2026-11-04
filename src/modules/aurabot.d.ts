@@ -82,6 +82,55 @@ export interface AskOptions {
   signal?: AbortSignal
 }
 
+/** 只由可信适配器记录实际发生的经历；不能直接使用模型编出的自传或草稿。 */
+export interface Experience {
+  source: 'chat' | 'browse' | 'tool' | 'pet' | 'purpose' | 'feedback'
+  originId: string
+  status: 'received' | 'sent' | 'read' | 'success' | 'failed' | 'proposed'
+  actor: 'user' | 'agent' | 'system'
+  text: string
+  at?: number
+  userId?: string
+  chatId?: string
+  session?: string
+  direct?: boolean
+  voluntary?: boolean
+  simulated?: boolean
+  generated?: boolean
+}
+
+export interface PersonalityProfile {
+  id: string
+  personaId: string
+  bornAt: number
+  revision: number
+  state: {
+    identity: { name: string; selfView: string; mission: string; values: string[] }
+    traits: Record<'composure' | 'optimism' | 'courage' | 'curiosity' | 'sociability' | 'assertiveness', number>
+    style: Record<'concise' | 'cool' | 'humorous', number>
+    relationships: Record<string, { kind: string; familiarity: number; trust: number; comfort: number }>
+    preferences: Array<{ text: string; topic?: string; polarity?: number }>
+    beliefs: Array<{ text: string }>
+    goals: Array<{ text: string }>
+    selfStory: Array<{ text: string }>
+  }
+}
+
+export interface PersonalityService {
+  current(): PersonalityProfile | null
+  text(): string
+  name(): string
+  relationship(chat: Chat): string
+  effects(): { sticker: number; voice: number; delay: number; chatty: number }
+  observe(event: Experience): boolean
+  rank<T>(items: T[], textOf: (item: T) => string): T[]
+  ownerInterests(): string[]
+  topics(): Array<{ topic: string; score: number }>
+  materials(): any[]
+  status(): any
+  invalidate(): void
+}
+
 /** 工具生成函数拿到的「在哪儿」。 */
 export interface Where {
   chat: Chat
@@ -158,6 +207,8 @@ export interface Events {
   'song/sung': (info: { title: string; chatId: ChatId }) => void
   /** 通知浏览学习模块；监听器只负责入队，不等待提炼完成 */
   'browse/observed': (batch: BrowseObservation) => void
+  'experience/recorded': (event: Experience) => void
+  'learning/processed': (batch: { batchId: string; platform: string; sourceIds: string[]; records: Array<{kind: string; title: string}> }) => void
   [custom: string]: (...args: any[]) => any
 }
 

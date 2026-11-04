@@ -72,15 +72,24 @@ export function apply(ctx) {
   const rulesOpts = (kind) => (mods ? { off: mods.builtinOff(), extra: mods.rules(kind) } : {})
   // 扩展模块能整段改写人格和规则（同步：提示词变量不能等）
   const rewrite = (event, text, ...args) => { const r = mods ? mods.filterSync(event, text, ...args) : text; return typeof r === 'string' ? r : r === null ? '' : text }
-  variable('aurabot_persona', () => rewrite('persona', currentPersonaText(cfg.persona.current)))
+  let resolvingPersona = false
+  const effectivePersona = () => {
+    const base = mods?.use('personality')?.text() || currentPersonaText(cfg.persona.current)
+    if (resolvingPersona) return base
+    resolvingPersona = true
+    try { return rewrite('persona', base) } finally { resolvingPersona = false }
+  }
+  const personaIdentity = () => mods?.use('personality')?.name() || readPersona(cfg.persona.current)?.name || '角色'
+  const personaConfig = () => mods?.use('personality')?.current() ? { ...cfg, ownerName: '朋友' } : cfg
+  variable('aurabot_persona', effectivePersona)
   variable('aurabot_rules_private', () => {
-    const base = rewrite('rules', rulesText('private', cfg, rulesOpts('private')), 'private')
+    const base = rewrite('rules', rulesText('private', personaConfig(), rulesOpts('private')), 'private')
     // 危险命令确认开着时补一句：被拦下要如实告诉主人，别绕着写
     return base + (cfg.security && cfg.security.dangerConfirm
       ? '\n【危险命令】终端命令如果被安全策略拦下（删根目录/格式化/关机/下载后直接执行等），把命令原文和原因如实告诉主人，等主人回复「确认」后再重试；不要换一种写法绕过。'
       : '')
   })
-  variable('aurabot_rules_social', () => rewrite('rules', rulesText('social', cfg, rulesOpts('social')), 'social'))
+  variable('aurabot_rules_social', () => rewrite('rules', rulesText('social', personaConfig(), rulesOpts('social')), 'social'))
 
   // ---------- QQ 网关 ----------
   const snowluma = createSnowLumaManager({
@@ -234,13 +243,17 @@ export function apply(ctx) {
   hub = createHub({
     localApi: local,
     dsh: ctx,
-    getConfig,
+    getConfig: () => {
+      const p = mods?.use('personality')
+      return p?.current() ? { ...cfg, ownerName: '朋友', group: { ...cfg.group, interests: p.ownerInterests(), wakeWords: [...(cfg.group.wakeWords || []).filter((w) => !['大肥鱼', '肥鱼'].includes(w)), p.name()] } } : cfg
+    },
     log: logger.child('chat'),
     onebot,
     stickers,
     tts,
     buildTools: (where) => mods.buildTools(where),
     contextProviders: [(args) => mods.contextFor(args)],
+    identityScope: () => mods?.use('personality')?.current()?.id || '',
     onActivity: (a) => mods.emit('activity', a),
     // 群聊话题和她的记忆有多相关（插话判断用）
     memoryScore: (text) => use('memory')?.topicScore?.(text) ?? 0,
@@ -327,7 +340,8 @@ export function apply(ctx) {
     listModels,
     defaultModel: () => defaultModel(ctx, { model: {} }),
     http: { body: readBody, raw: readRaw, query, send },
-    personas: { list: listPersonas, read: readPersona, current: () => currentPersonaText(cfg.persona.current) },
+    personas: { list: listPersonas, read: readPersona, base: () => currentPersonaText(cfg.persona.current), current: effectivePersona,
+      name: personaIdentity, address: () => mods?.use('personality')?.current() ? '朋友' : cfg.ownerName || '主人' },
     getConfig, setConfig,
   }
   mods = createModules({ ctx, core, getConfig, setConfig, logger, version: VERSION, builtins: BUILTINS })
@@ -466,6 +480,7 @@ export function apply(ctx) {
       sessions: hub.sessions(),
       workspaceDir: workspaceDirOf(cfg),
       personas: listPersonas(),
+      personality: { active: Boolean(use('personality')?.current()), name: use('personality')?.name() || '', revision: use('personality')?.current()?.revision || 0 },
       modules: mods.status(),
       bridge: { dshTools: cfg.bridge.dshTools, http: cfg.bridge.http, hasToken: Boolean(cfg.bridge.token), tools: bridge.deniedTools(), toolsService: Boolean(ctx.get?.('tools')) },
     }
@@ -823,6 +838,10 @@ export function apply(ctx) {
   route('/persona/save', async (req) => {
     const b = await readBody(req)
     const p = savePersona(b.id, b)
+    if (mods.use('personality')?.current()?.personaId === p.id) {
+      setConfig({ ...cfg, ext: { ...cfg.ext, personality: { ...cfg.ext.personality, enabled: false } } })
+      return { ok: true, persona: p, message: '已采用你编辑的人格卡并关闭成长覆盖；成长档案保留，可在人格成长页重新选择' }
+    }
     return { ok: true, persona: p, message: '人格已保存，下一轮起生效' }
   })
   route('/persona/delete', async (req) => {
