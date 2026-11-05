@@ -11,12 +11,13 @@ export function biliObservation(looked, origin = 'browse') {
 }
 
 export function douyinObservation(looked, origin = 'browse') {
-  return { platform: 'douyin', origin, items: looked.map(({ v, comments = [] }) => ({
+  return { platform: 'douyin', origin, items: looked.map(({ v, comments = [], transcript = '', vision = '' }) => ({
     id: v.awemeId, title: v.title, author: v.author, publishedAt: v.createdAt,
     sections: [
       { kind: 'title', text: v.title }, { kind: 'description', text: v.desc },
       { kind: 'summary', text: v.summary },
       { kind: 'chapters', text: typeof v.chapters === 'string' ? v.chapters : (v.chapters || []).map((c) => typeof c === 'string' ? c : c.title || c.desc || '').join('\n') },
+      { kind: 'subtitle', text: transcript }, { kind: 'vision', text: vision },
       { kind: 'comments', text: comments.slice(0, 8).map((c) => `${c.name || c.nickname || ''}：${c.text || ''}`).join('\n') },
     ].filter((s) => s.text),
   })) }

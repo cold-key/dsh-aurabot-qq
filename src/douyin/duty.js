@@ -7,6 +7,7 @@ import { isSilence } from '../chat/reply.js'
 import { permOf } from '../chat/access.js'
 import { createBrowser } from './browser.js'
 import { createSite, findAwemeId, resolveShort, digestOf, videoLink } from './site.js'
+import { lookAt, mediaState } from './media.js'
 import { douyinObservation } from '../social-learning/observations.js'
 
 const dayKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
@@ -35,7 +36,7 @@ const emptyState = () => ({
   dmSeen: [], dmInit: false, lastDmCheck: 0, // 主人抖音私信：看过的消息 id；第一次看时旧消息只记下不回
 })
 
-export function createDouyin({ getConfig, setOwner, hub, memory, log, site: injected, now = Date.now, wait, learning = () => null, personality = () => null, onObserved = () => {} } = {}) {
+export function createDouyin({ getConfig, setOwner, hub, memory, log, site: injected, now = Date.now, wait, learning = () => null, personality = () => null, onObserved = () => {}, dsh = null, mediaDeps = {} } = {}) {
   const cfg = () => getConfig().douyin
   const sleep = wait || ((ms) => new Promise((r) => setTimeout(r, ms)))
   const site = injected || createSite({ browser: createBrowser({ profileDir: dataDir('douyin', 'edge-profile'), browserPath: () => cfg().browserPath, log }), log })
@@ -241,6 +242,37 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
   }
 
   /**
+   * 补全抽帧 / 听声音要用的东西。
+   * 推荐流里 video.play_addr 的地址没带签名，CDN 直接 403（实测）；详情接口里的才可用，
+   * 字幕轨（cla_info）也只在这里出现。所以开着这两项时，每个视频多查一次详情。
+   */
+  async function enrich(v) {
+    const c = cfg()
+    const mode = c.transcript === 'auto' || c.transcript === 'caption' ? c.transcript : 'off'
+    if (!c.vision && mode === 'off') return v
+    const d = await site.detail(v.awemeId).catch(() => null)
+    if (!d) return v
+    return {
+      ...v,
+      playUrl: d.playUrl || v.playUrl || '',
+      captions: (d.captions && d.captions.length) ? d.captions : (v.captions || []),
+      duration: d.duration || v.duration,
+    }
+  }
+
+  /**
+   * 看画面 / 听声音的旁路（可选）：返回 { transcript, vision }。
+   * 两个开关都关着时直接返回空的、不联网；出错也只当没读到，不能影响这一轮。
+   */
+  function deepen(info) {
+    const c = cfg()
+    const mode = c.transcript === 'auto' || c.transcript === 'caption' ? c.transcript : 'off'
+    if (!c.vision && mode === 'off') return Promise.resolve({ transcript: '', vision: '' })
+    return lookAt({ dsh, cfg: getConfig(), info, log, deps: mediaDeps })
+      .catch((error) => { log.debug('看画面 / 听声音出错：', error.message); return { transcript: '', vision: '' } })
+  }
+
+  /**
    * 刷一轮。force = 面板里手动点的 / 主人让她去刷的（不占每天的轮数）。
    * ownerAsked = 主人开口要她找视频：这轮至少分享一个给主人，她挑剔到一个都不分享时自动挑一个。
    */
@@ -264,8 +296,12 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
       for (const v of list) {
         try {
           const comments = await site.comments(v.awemeId).catch(() => [])
+          // 详情里才有可抽帧的播放地址（推荐流里的没签名）：先补一次，再和「停留播放」并行
+          const info = await enrich(v)
+          const extra = deepen(info)
           await site.watch(v.awemeId, between(c.dwellMin, c.dwellMax) * 1000)
-          looked.push({ v, comments })
+          const { transcript, vision } = await extra
+          looked.push({ v: info, comments, transcript, vision })
           s.watched++
           s.seen = [...s.seen.filter((x) => x !== v.awemeId), v.awemeId].slice(-500)
         } catch (error) {
@@ -288,7 +324,7 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
         : ''
       let out = ''
       try {
-        out = await think(`你在抖音刷到了这几个视频：\n\n${looked.map((x, i) => `【${i + 1}】${digestOf(x.v, x.comments)}`).join('\n\n')}\n\n` +
+        out = await think(`你在抖音刷到了这几个视频：\n\n${looked.map((x, i) => `【${i + 1}】${digestOf(x.v, x.comments, { transcript: x.transcript, vision: x.vision })}`).join('\n\n')}\n\n` +
         `看完说说你的想法。对每个视频给一个对象：{"i":序号, "feeling":"一句你的真实感受", "like":true/false, "comment":"想在视频下发的评论（像普通观众，一两句、别打广告，不想评就空字符串）", ${atLeft ? '"at":true/false, ' : ''}"share":"想分享给${owner()}时说的话（不想分享就空字符串）", "remember":"值得记住的一件事（没有就空字符串）"}。` +
         `这次最多点赞 ${likeLeft} 个、评论 ${commentLeft} 个、分享 ${shareLeft} 个。${atRule}${shareLeft ? (ownerAsked ? `${owner()}刚才专门让你找视频给他，这轮至少挑一个最合适的写 share，别全空着。` : shareHint()) : ''}只输出 JSON 数组。`)
       } catch (error) {
@@ -414,10 +450,11 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
       const r = await ready(s)
       if (!r.ok) return r
       const [v, comments] = await Promise.all([site.detail(id), site.comments(id).catch(() => [])])
-      onObserved(douyinObservation([{ v, comments }], 'watch'))
+      const extra = await deepen(v)
+      onObserved(douyinObservation([{ v, comments, ...extra }], 'watch'))
       memory?.addEvent?.({ text: `看了别人发来的抖音视频《${v.title}》`, tags: ['抖音'], importance: 0.4 })
       record(s, { kind: 'look', awemeId: id, title: v.title, author: v.author })
-      return { ok: true, message: digestOf(v, comments), awemeId: id, title: v.title }
+      return { ok: true, message: digestOf(v, comments, extra), awemeId: id, title: v.title }
     } catch (error) {
       return { ok: false, message: '这个视频没打开：' + error.message }
     } finally {
@@ -718,6 +755,7 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
       caps: { like: capOf(s, 'like'), comment: capOf(s, 'comment'), share: capOf(s, 'share'), atOwner: capOf(s, 'atOwner'), writes: isNew(s) ? Math.floor(c.gate.maxWritesPerDay / 2) : c.gate.maxWritesPerDay },
       newAccount: isNew(s), lastRun: s.lastRun, nextDueAt: s.nextDueAt, lastSkipReason: s.lastSkipReason,
       pauseReason: paused(s) ? s.pauseReason : '', account: s.account, busy, browserOpen: site.connected(),
+      media: mediaState(getConfig(), dsh),
       history: s.history.slice(0, 30),
     }
   }

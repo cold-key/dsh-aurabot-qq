@@ -1,7 +1,9 @@
 // 抖音网页上的具体操作。数据都走抖音网页自己的接口（在页面里 fetch，签名由页面脚本自动加），
-// 不读屏、不截图；点赞 / 评论在视频页上真点按钮，再等接口返回确认成没成功。
+// 不读屏、不截页面图；点赞 / 评论在视频页上真点按钮，再等接口返回确认成没成功。
+// 抽帧 / 字幕不在这一层：视频地址和字幕地址从这里带出去，解码在 media.js（不走页面）。
 
 import { setTimeout as sleep } from 'node:timers/promises'
+import { captionTracks, pickPlayUrl } from './media.js'
 
 const HOME = 'https://www.douyin.com/'
 export const videoLink = (id) => `https://www.douyin.com/video/${id}`
@@ -76,6 +78,9 @@ export function normalizeAweme(raw) {
     music: a.music?.title ? clean(`${a.music.title}${a.music.author ? ' - ' + a.music.author : ''}`, 60) : '',
     isImages: Array.isArray(a.images) && a.images.length > 0,
     createdAt: num(a.create_time) * 1000,
+    // 抽帧 / 抽音频用（图文的没有）；字幕是抖音自己生成的 AI 字幕，有就白拿
+    playUrl: pickPlayUrl(a),
+    captions: captionTracks(a),
   }
 }
 
@@ -90,15 +95,22 @@ export function parseComments(json, max = 8) {
 
 const wan = (n) => (n >= 10000 ? (n / 10000).toFixed(n >= 100000 ? 0 : 1) + '万' : String(n))
 
-/** 一个视频交给她看的样子：标题、作者、数据、分类、摘要 / 章节、文案、音乐、热评。 */
-export function digestOf(v, comments = []) {
+/**
+ * 一个视频交给她看的样子：标题、作者、数据、分类、摘要 / 章节、文案、音乐、字幕 / 语音、画面、热评。
+ * transcript / vision 只在开了「听声音」「看画面」时才有。
+ */
+export function digestOf(v, comments = [], { transcript = '', vision = '' } = {}) {
+  const chapters = Array.isArray(v.chapters) ? v.chapters : []
+  const category = Array.isArray(v.category) ? v.category : []
   return [
     `《${v.title || '（无标题）'}》 作者：${v.author || '?'}  赞 ${wan(v.likes)}  评论 ${wan(v.comments)}${v.duration ? '  ' + v.duration + ' 秒' : ''}${v.isImages ? '  图文' : ''}`,
-    v.category.length ? `分类：${v.category.join(' / ')}` : '',
+    category.length ? `分类：${category.join(' / ')}` : '',
     v.summary ? `内容摘要：${v.summary}` : '',
-    v.chapters.length ? '分段：\n' + v.chapters.map((c) => '  - ' + c).join('\n') : '',
+    chapters.length ? '分段：\n' + chapters.map((c) => '  - ' + c).join('\n') : '',
     v.desc && v.desc !== v.title ? `文案：${v.desc}` : '',
     v.music ? `配乐：${v.music}` : '',
+    transcript ? `字幕 / 语音（节选）：${transcript}` : '',
+    vision ? `画面（抽帧）：${vision}` : '',
     comments.length ? '热评：\n' + comments.map((c) => `  ${c.name}：${c.text}（${wan(c.likes)} 赞）`).join('\n') : '',
   ].filter(Boolean).join('\n')
 }

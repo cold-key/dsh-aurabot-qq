@@ -4,27 +4,18 @@
 // 没开开关 / 没 ffmpeg / 没 cid / 流地址取不到 / 模型明确不支持图片时跳过，
 // 不影响原来「标题 + 简介 + 字幕 + 热评」的文本流程。
 
-import { spawn } from 'node:child_process'
 import { UA } from './api.js'
 import { askModel, canSeeImages } from '../core/llm.js'
 import { findFfmpeg } from '../core/img.js'
 import { assertPublicUrl } from '../core/net.js'
+import { frameTimes, grabFrame } from '../core/frames.js'
 
-// ffmpeg 的查找已经抽到 core/img.js（生图那边也要用），这里保留导出，老的引用不受影响
-export { findFfmpeg }
+// ffmpeg 的查找已经抽到 core/img.js（生图那边也要用），抽帧本身抽到 core/frames.js（抖音也用），
+// 这里都保留导出，老的引用不受影响
+export { findFfmpeg, frameTimes, grabFrame }
 
-/** 抽帧时间点（秒）：跳过开头结尾各 5%，中间均匀铺开。 */
-export function frameTimes(durationSec, count) {
-  const d = Number(durationSec) || 0
-  if (!Number.isFinite(d) || !(d > 0)) return []
-  const n = Math.max(1, Math.min(12, Math.round(Number(count) || 6)))
-  const out = []
-  for (let i = 0; i < n; i++) {
-    const p = n === 1 ? 0.5 : 0.05 + (0.9 * i) / (n - 1)
-    out.push(Math.min(Math.max(0, Math.round(d * p)), Math.max(0, Math.floor(d) - 1)))
-  }
-  return [...new Set(out)]
-}
+/** B 站 CDN 要 Referer，否则 403。 */
+const CDN_HEADERS = `Referer: https://www.bilibili.com/\r\nUser-Agent: ${UA}\r\n`
 
 /** 挑一路流来抽帧：优先 H.264（兼容性最好）、短边不低于 480、带宽最低的那路。 */
 export function pickVideoStream(list = []) {
@@ -34,47 +25,6 @@ export function pickVideoStream(list = []) {
   const pool = avc.length ? avc : ok
   const decent = pool.filter((v) => Math.min(Number(v.width) || 0, Number(v.height) || 0) >= 480)
   return (decent.length ? decent : pool).slice().sort((a, b) => (a.bandwidth || 0) - (b.bandwidth || 0))[0] || null
-}
-
-/** 从流里抽一帧（JPEG）。失败返回 null，不抛。 */
-export function grabFrame(ffmpeg, url, at, { width = 512, timeoutMs = 15000, maxBytes = 2 * 1024 * 1024 } = {}) {
-  return new Promise((resolve) => {
-    let settled = false
-    let timer
-    const finish = (v) => { if (!settled) { settled = true; clearTimeout(timer); resolve(v) } }
-    let proc
-    try {
-      proc = spawn(ffmpeg, [
-        '-hide_banner', '-loglevel', 'error', '-nostdin',
-        // B 站 CDN 要 Referer，否则 403
-        '-headers', `Referer: https://www.bilibili.com/\r\nUser-Agent: ${UA}\r\n`,
-        '-rw_timeout', String(timeoutMs * 1000),
-        '-protocol_whitelist', 'http,https,tcp,tls,crypto',
-        '-ss', String(at), '-i', url,
-        '-frames:v', '1', '-an', '-vf', `scale=${width}:-2`,
-        '-q:v', '3', '-f', 'image2', '-c:v', 'mjpeg', 'pipe:1',
-      ], { windowsHide: true })
-    } catch (error) {
-      return finish(null)
-    }
-    const out = []
-    let bytes = 0
-    const stop = () => { try { proc.kill() } catch (error) {} finish(null) }
-    timer = setTimeout(stop, timeoutMs)
-    proc.stdout.on('data', (d) => {
-      if (settled) return
-      bytes += d.length
-      if (bytes > maxBytes) return stop()
-      out.push(d)
-    })
-    proc.stderr.on('data', () => {}) // 只用来占位，别让管道堵住
-    proc.on('error', () => { clearTimeout(timer); finish(null) })
-    proc.on('close', (code) => {
-      clearTimeout(timer)
-      const buf = Buffer.concat(out)
-      finish(code === 0 && buf.length > 500 && buf[0] === 0xff && buf[1] === 0xd8 ? buf : null)
-    })
-  })
 }
 
 const SYSTEM = '你在看一个视频的若干张截图。只写画面上确实能看到的东西：场景、人物、物体、动作、画面里的文字 / 字幕条 / 贴纸。不要猜剧情，不要编造没出现的内容，不要发表感想。用 3~6 句中文写。'
@@ -173,7 +123,7 @@ export async function lookWithVision({ dsh, api, info, getConfig, log, deps = {}
         at = Math.max(0, t - win.startMs / 1000) // 段内相对时间
         await assertUrl(url)
       }
-      const buf = await (deps.grabFrame || grabFrame)(ffmpeg, url, at, { timeoutMs: Math.min(15000, remaining) })
+      const buf = await (deps.grabFrame || grabFrame)(ffmpeg, url, at, { timeoutMs: Math.min(15000, remaining), headers: CDN_HEADERS })
       if (buf) frames.push({ sec: t, buf })
     }
     if (!frames.length) {

@@ -8,15 +8,15 @@ import { profileToolVisible, profilePermits } from '../../chat/access.js'
 export default {
   id: 'douyin',
   name: '刷抖音',
-  version: '2.1.0',
-  description: '专用浏览器刷抖音：看推荐、点赞、评论（可在评论里真·@主人），好玩的分享给主人（抖音私信 / QQ）；别人发来链接能点开看（douyin_watch / douyin_like / douyin_comment / douyin_browse）',
+  version: '2.2.0',
+  description: '专用浏览器刷抖音：看推荐、点赞、评论（可在评论里真·@主人），好玩的分享给主人（抖音私信 / QQ）；别人发来链接能点开看（douyin_watch / douyin_like / douyin_comment / douyin_browse）。可选抽帧看画面、读抖音自带字幕或做语音识别',
   tab: 'douyin',
-  files: ['douyin/duty.js', 'douyin/site.js', 'douyin/browser.js', 'social-learning/observations.js'],
+  files: ['douyin/duty.js', 'douyin/site.js', 'douyin/browser.js', 'douyin/media.js', 'social-learning/observations.js'],
   setup(api) {
     const { hub, http } = api.core
     // 主人的抖音号只由「核对」写入（面板存配置时不能直接改 secUid）
     const setOwner = (owner) => api.setConfig((cur) => ({ ...cur, douyin: { ...cur.douyin, owner } }))
-    const dy = createDouyin({ getConfig: api.config, setOwner, hub, memory: api.lazy('memory'), log: api.log,
+    const dy = createDouyin({ getConfig: api.config, setOwner, hub, memory: api.lazy('memory'), log: api.log, dsh: api.dsh,
       learning: () => api.use('social-learning'), personality: () => api.use('personality'), onObserved: (batch) => api.emit('browse/observed', batch) })
     api.every(60_000, () => dy.tick(), '刷抖音')
 
@@ -35,7 +35,7 @@ export default {
       if (profileToolVisible(cfg, 'douyinBrowse', chat)) {
         tools.push(defineTool({
           name: 'douyin_watch',
-          description: '打开一个抖音视频看看：读标题、分类、内容摘要和热评，看完再聊。别人发来抖音链接（v.douyin.com 短链也行）时用。',
+          description: '打开一个抖音视频看看：读标题、分类、内容摘要和热评（面板开了「看画面 / 听声音」时，也能看到画面描述和字幕 / 语音），看完再聊。别人发来抖音链接（v.douyin.com 短链也行）时用。',
           properties: { link: str('抖音视频链接或 v.douyin.com 短链') },
           required: ['link'],
           execute: guarded('douyinBrowse', ({ link }) => dy.watch(String(link || ''))),

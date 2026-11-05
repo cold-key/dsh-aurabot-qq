@@ -144,7 +144,7 @@ function fakeSite({ feed = [], loggedIn = true, verify = '', likeError = null, c
 }
 
 let n = 0
-function setup({ decisions = [], cfgOver = {}, douyinOver = {}, siteOpts = {}, now, onWait = () => {}, owner, turn, learning, onObserved } = {}) {
+function setup({ decisions = [], cfgOver = {}, douyinOver = {}, siteOpts = {}, now, onWait = () => {}, owner, turn, learning, onObserved, mediaDeps, dsh } = {}) {
   process.env.AURABOT_DATA_DIR = mkdtempSync(join(tmpdir(), 'aurabot-douyin-' + n++ + '-'))
   const sent = []
   const events = []
@@ -160,7 +160,7 @@ function setup({ decisions = [], cfgOver = {}, douyinOver = {}, siteOpts = {}, n
   const fs = fakeSite({ feed: [aweme('7000000000000000001'), aweme('7000000000000000002', { is_ads: true }), aweme('7000000000000000003'), aweme('7000000000000000004')], ...siteOpts })
   const waits = []
   const owners = []
-  const dy = duty.createDouyin({ getConfig: () => cfg, setOwner: (o) => { owners.push(o); cfg.douyin.owner = o }, hub, memory, log: { info() {}, warn() {}, debug() {} }, site: fs, wait: async (ms) => { waits.push(ms); onWait(ms) }, ...(now ? { now } : {}), learning, onObserved })
+  const dy = duty.createDouyin({ getConfig: () => cfg, setOwner: (o) => { owners.push(o); cfg.douyin.owner = o }, hub, memory, log: { info() {}, warn() {}, debug() {} }, site: fs, wait: async (ms) => { waits.push(ms); onWait(ms) }, ...(now ? { now } : {}), learning, onObserved, mediaDeps, dsh })
   return { dy, fs, hub, sent, events, prompts, cfg, waits, owners, pushed }
 }
 
@@ -641,4 +641,75 @@ test('私信里让她去刷、却没刷成：在私信里照实跟主人说一�
   assert.ok(await until(() => fs.calls.dm.length === 2), '先回「得令」，没刷成再说一声')
   assert.deepEqual(fs.calls.dm, ['得令', '刚才没刷成 推荐里没刷到新的'])
   assert.ok(prompts.some((p) => /没刷成/.test(p)))
+})
+
+test('看画面 / 听声音：默认关着，不抽帧、不读字幕、不比以前多请求', async () => {
+  const hits = []
+  const mediaDeps = {
+    findFfmpeg: () => { hits.push('ffmpeg'); return 'ffmpeg' },
+    grabFrame: async () => { hits.push('frame'); return Buffer.from('jpeg') },
+    fetchCaption: async () => { hits.push('caption'); return '字幕' },
+    transcribeAudio: async () => { hits.push('asr'); return '识别' },
+  }
+  const { dy, prompts } = setup({ decisions: [{ i: 1 }], douyinOver: { perRun: 1 }, mediaDeps, dsh: { get: () => null } })
+  await dy.run({ force: true })
+  assert.deepEqual(hits, [], '开关关着就一点都不该动')
+  assert.ok(!prompts[0].includes('画面（抽帧）'))
+  assert.ok(!prompts[0].includes('字幕 / 语音'))
+})
+
+test('看画面 / 听声音：开了才走旁路，字幕和画面进这一轮的摘要', async () => {
+  const calls = []
+  const urls = []
+  const clip = aweme('7000000000000000009', {
+    video: {
+      duration: 30_000,
+      // 推荐流给的是没签名的地址（线上 CDN 会 403）：真正能抽的是详情接口里那条
+      play_addr: { url_list: ['https://cdn.example/feed-unsigned.mp4'] },
+    },
+  })
+  const mediaDeps = {
+    findFfmpeg: () => 'ffmpeg',
+    assertPublicUrl: async (u) => { urls.push(u) },
+    canSeeImages: async () => true,
+    grabFrame: async (_exe, u) => { calls.push('frame'); return Buffer.from('jpeg') },
+    describeFrames: async () => { calls.push('describe'); return '一只猫在扒门。' },
+    fetchCaption: async () => { calls.push('caption'); return '它自己把门拉开了' },
+  }
+  const { dy, fs, prompts } = setup({
+    decisions: [{ i: 1, feeling: '看懂了' }],
+    douyinOver: { perRun: 1, vision: true, visionFrames: 2, transcript: 'caption' },
+    siteOpts: { feed: [clip] },
+    mediaDeps,
+    dsh: { get: () => null },
+  })
+  // 详情接口：签名地址 + 自带字幕
+  fs.detail = async (id) => ({
+    ...site.normalizeAweme(aweme(id)),
+    playUrl: 'https://cdn.example/detail-signed.mp4',
+    captions: [{ lang: 'zh', url: 'https://cdn.example/c.json' }],
+  })
+  const r = await dy.run({ force: true })
+  assert.equal(r.ok, true, r.message)
+  assert.equal(urls[0], 'https://cdn.example/detail-signed.mp4', '用详情接口的播放地址，不用推荐流里没签名的')
+  assert.match(prompts[0], /字幕 \/ 语音（节选）：它自己把门拉开了/)
+  assert.match(prompts[0], /画面（抽帧）：一只猫在扒门。/)
+  assert.deepEqual(calls.sort(), ['caption', 'describe', 'frame', 'frame'], '字幕一次、两帧、一次视觉描述')
+})
+
+test('看画面 / 听声音：旁路出错不能把这一轮带塌', async () => {
+  const clip = aweme('7000000000000000009', {
+    video: { duration: 30_000, play_addr: { url_list: ['https://cdn.example/v.mp4'] } },
+  })
+  const { dy, prompts } = setup({
+    decisions: [{ i: 1 }],
+    douyinOver: { perRun: 1, vision: true, transcript: 'auto' },
+    siteOpts: { feed: [clip] },
+    mediaDeps: { findFfmpeg: () => 'ffmpeg', assertPublicUrl: async () => { throw new Error('CDN 不通') } },
+    dsh: { get: () => null },
+  })
+  const r = await dy.run({ force: true })
+  assert.equal(r.ok, true, r.message)
+  assert.equal(r.watched, 1)
+  assert.ok(!prompts[0].includes('画面（抽帧）'))
 })

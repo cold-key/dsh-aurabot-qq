@@ -145,6 +145,11 @@ export const DEFAULTS = {
     maxWatchPerDay: 30, // 每天最多看几个（手动让她刷也算；主人亲口让她找视频时不受这个限制）
     dwellMin: 8, // 每个视频停留的秒数（随机取一个）
     dwellMax: 40,
+    vision: false, // 可选：ffmpeg 抽几帧交给视觉模型，让她真的「看」到画面
+    visionFrames: 4, // 每个视频抽几帧
+    transcript: 'off', // 听声音：off = 不听 | caption = 只用抖音自带字幕 | auto = 没字幕就抽音频做语音识别
+    asrMaxSeconds: 120, // 语音识别最多听前多少秒（音轨长了很慢）
+    ffmpegPath: '', // 留空自己在 PATH 里找；B 站页填了的话会沿用
     browserPath: '', // 留空 = 自动找 Edge（找不到再找 Chrome / Chromium）；也可填完整路径
     shareBias: 'proactive', // stingy | normal | proactive：刷到好看的视频，分享给主人的积极程度
     ownerDm: true, // 主人在抖音上私信她时回（只认核对过的主人抖音号）
@@ -344,6 +349,11 @@ export function normalize(raw) {
   d.maxWatchPerDay = num(d.maxWatchPerDay, 30, 0, 200)
   d.dwellMin = num(d.dwellMin, 8, 3, 120)
   d.dwellMax = Math.max(d.dwellMin, num(d.dwellMax, 40, 3, 300))
+  d.vision = bool(d.vision, false)
+  d.visionFrames = Math.round(num(d.visionFrames, 4, 2, 10))
+  d.transcript = ['off', 'caption', 'auto'].includes(d.transcript) ? d.transcript : 'off'
+  d.asrMaxSeconds = Math.round(num(d.asrMaxSeconds, 120, 10, 600))
+  d.ffmpegPath = String(d.ffmpegPath || '').trim()
   d.browserPath = String(d.browserPath || '').trim()
   d.shareTo = ['douyin', 'qq', 'both'].includes(d.shareTo) ? d.shareTo : 'douyin'
   d.ownerDm = bool(d.ownerDm, true)
