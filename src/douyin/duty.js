@@ -538,7 +538,7 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
     run({ force: true, ownerAsked }).then((r) => {
       if (report) return hub.pushToSession?.(report, [{ type: 'text', text: resultNote(r) }], '')
     }).catch((error) => log.warn('刷完报告结果出错：', error.message))
-    return { ok: true, message: `刚开始刷，这一轮看 ${c.perRun} 个左右，大概 ${Math.ceil((c.perRun * (c.dwellMin + c.dwellMax)) / 2 / 60) + 1} 分钟。现在还什么都没分享，刷完系统会把结果告诉你，在那之前别跟对方说「已经发了」。` }
+    return { ok: true, pending: true, message: `刚开始刷，这一轮看 ${c.perRun} 个左右，大概 ${Math.ceil((c.perRun * (c.dwellMin + c.dwellMax)) / 2 / 60) + 1} 分钟。现在还什么都没分享，刷完系统会把结果告诉你，在那之前别跟对方说「已经发了」。` }
   }
 
   /**

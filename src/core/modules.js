@@ -530,18 +530,27 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
           if (names.has(t.name)) { log.debug(`工具 ${t.name} 重名，模块「${rec.id}」的没挂`); continue }
           names.add(t.name)
           if (typeof t.execute !== 'function') { out.push(t); continue }
+          // 该工具在解释器内已有逐次验证回执，避免外层包装对同一运行重复计分。
+          if (rec.id === 'personality' && t.name === 'use_learned_skill') { out.push(t); continue }
           out.push({ ...t, execute: async (...args) => {
             const profileId = exportsOf('personality')?.current()?.id
-            const notify = (status) => {
+            let episode = null
+            if (!core.hub.isSimulating?.() && !getConfig().dryRun) {
+              try { episode = exportsOf('personality')?.beginAction?.({ action: t.name, chat: where.chat }) } catch (error) { note(rec.id, '记录学习任务', error) }
+            }
+            const notify = (status, result) => {
               if (!profileId || exportsOf('personality')?.current()?.id !== profileId || core.hub.isSimulating?.()) return
-              emit('experience/recorded', { source: 'tool', originId: randomUUID(), actor: 'agent', status,
+              if (!getConfig().dryRun && !result?.simulated && !result?.dryRun && !result?.pending && !result?.queued && typeof result?.ok === 'boolean') {
+                try { exportsOf('personality')?.endAction?.(episode, { authority: 'execution', success: result.ok, receiptId: episode?.id, detail: `工具 ${t.name} 接口返回 ${result.ok ? '成功' : '失败'}：${String(result.message || '').slice(0, 300)}` }) } catch (error) { note(rec.id, '记录学习回执', error) }
+              }
+              emit('experience/recorded', { source: 'tool', originId: episode?.id || randomUUID(), actor: 'agent', status,
                 chatId: where.chat?.chatId, session: where.sessionId, text: `工具 ${t.name} 的实际返回结果：${status}`, voluntary: false, simulated: getConfig().dryRun })
             }
             try {
               const result = await t.execute(...args)
-              notify(result?.ok === true && !result.simulated && !result.dryRun ? 'success' : 'failed')
+              notify(result?.pending || result?.queued ? 'pending' : result?.ok === true && !result.simulated && !result.dryRun ? 'success' : 'failed', result)
               return result
-            } catch (error) { notify('failed'); throw error }
+            } catch (error) { notify('failed', { ok: false, message: error.message }); throw error }
           } })
         }
       }

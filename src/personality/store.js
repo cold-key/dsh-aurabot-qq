@@ -2,6 +2,7 @@
 import { readFileSync } from 'node:fs'
 import { writeJson } from '../core/store.js'
 import { DAY } from './engine.js'
+import { ensureMind, trimMind } from '../cognition/state.js'
 
 export function createPersonalityStore(file, now = Date.now) {
   function read() {
@@ -11,11 +12,13 @@ export function createPersonalityStore(file, now = Date.now) {
       throw new Error('人格数据无法读取，保留原文件')
     }
     if (value?.version !== 1 || !Array.isArray(value.profiles) || !value.quota) throw new Error('人格数据版本不兼容，保留原文件')
+    for (const p of value.profiles) ensureMind(p)
     return value
   }
   function update(fn) {
     const s = read(), result = fn(s)
     for (const p of s.profiles) {
+      trimMind(p)
       p.events = p.events.filter((e) => now() - e.at <= 90 * DAY).slice(-5000)
       p.seen = p.seen.slice(-10000); p.processed = p.processed.slice(-10000)
       p.changes = p.changes.slice(-1000); p.snapshots = p.snapshots.slice(-200)

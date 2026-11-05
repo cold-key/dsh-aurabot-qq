@@ -28,7 +28,10 @@ before(async () => {
   fake = createFakeDsh({ brain: async () => '收到啦' })
   fake.ctx.llm.stream = async function* (params) {
     const input = JSON.parse(params.messages[0].content[0].text)
-    yield { type: 'text-delta', text: JSON.stringify({ changes: [{ path: 'identity.mission', value: '认真观察并好好过每一天', reason: '近期真实交流后的使命表述候选', confidence: 0.9, evidenceIds: input.events.map((e) => e.id) }] }) }
+    const evidence = input.events.filter((e) => e.source === 'chat').slice(-2).map((e) => ({ eventId: e.id, quote: e.text }))
+    yield { type: 'text-delta', text: JSON.stringify({ changes: [{ path: 'identity.mission', value: '认真观察并好好过每一天', reason: '近期真实交流后的使命表述候选', confidence: 0.9, evidenceIds: input.events.map((e) => e.id) }],
+      learning: { skills: [{ id: 'daily-materials', name: '选择相关经历', task: 'evidence.select', text: '选择与问题有关的经历', topic: '日常', confidence: 0.9, reason: '比较多条实际交流', evidence,
+        program: [{ op: 'filter', field: 'valid', test: 'truthy' }, { op: 'filter', field: 'text', test: 'relevant' }, { op: 'unique', field: 'id' }, { op: 'take', count: 3 }] }] } }) }
     yield { type: 'finish', reason: { kind: 'stop' } }
   }
   api = (await import('../src/host.js')).apply(fake.ctx); await api.ready
@@ -97,4 +100,25 @@ test('切回普通人格后不再使用萤宝状态；直接编辑出生卡会�
   const result = (await fake.call('/persona/save', { id: profile.personaId, name: '人工卡', body: '你是人工编辑的新身份', tags: [] })).json()
   assert.equal(result.ok, true); assert.equal(personality.current(), null)
   assert.match(fake.variables.get('aurabot_persona')(), /人工编辑的新身份/)
+})
+
+test('宿主实际工具执行已学程序，模拟不计分；明确用户反馈与技术成功分别记录', async () => {
+  await post('activate', { id: profile.id })
+  const personality = api.modules.use('personality'), chat = { kind: 'private', chatId: 'private:10000001', userId: '10000001' }
+  const tool = api.modules.buildTools({ chat, level: 'act', sessionId: 'cognition-test' }).find((t) => t.name === 'use_learned_skill')
+  assert.ok(tool)
+  const result = await tool.execute({ skillId: 'daily-materials', query: '日常' })
+  assert.equal(result.ok, true, result.message); assert.ok(result.items.length > 0)
+  assert.ok(result.items.every((r) => personality.current().events.some((e) => e.id === r.id)))
+  const count = personality.current().mind.counters.outcomes
+  await api.hub.capture(() => tool.execute({ skillId: 'daily-materials', query: '日常' }))
+  assert.equal(personality.current().mind.counters.outcomes, count)
+  const e = personality.current().mind.episodes.findLast((e) => e.userId === chat.userId && e.receipt)
+  api.modules.emit('activity', { kind: 'in', eventId: 'explicit-feedback-1', chatId: chat.chatId, userId: chat.userId, direct: true, text: `成长反馈 ${e.id} 差 没有回答我真正的问题` })
+  const live = personality.current().mind.episodes.find((x) => x.id === e.id)
+  assert.equal(live.receipt.success, true); assert.equal(live.feedback.helpful, false)
+  api.modules.emit('activity', { kind: 'in', eventId: 'forged-feedback', chatId: 'private:999', userId: '999', direct: true, text: `成长反馈 ${e.id} 好` })
+  assert.equal(personality.current().mind.episodes.find((x) => x.id === e.id).feedback.helpful, false)
+  const getRollback = await api.modules.handle('/aurabot/api/personality/skill-rollback', { method: 'GET', headers: {} })
+  assert.equal(getRollback.ok, false)
 })

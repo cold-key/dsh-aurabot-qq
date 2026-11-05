@@ -104,6 +104,7 @@ export interface PersonalityProfile {
   personaId: string
   bornAt: number
   revision: number
+  mind: CognitiveState
   state: {
     identity: { name: string; selfView: string; mission: string; values: string[] }
     traits: Record<'composure' | 'optimism' | 'courage' | 'curiosity' | 'sociability' | 'assertiveness', number>
@@ -115,6 +116,26 @@ export interface PersonalityProfile {
     selfStory: Array<{ text: string }>
   }
 }
+
+export interface CognitiveState {
+  version: 1
+  revision: number
+  /** 开放概念，带逐字证据、可见范围及修订历史；管理页面按具体类型展示。 */
+  models: any[]
+  motives: any[]
+  beliefs: any[]
+  strategies: any[]
+  skills: any[]
+  episodes: any[]
+  decisions: any[]
+  experiments: any[]
+  applied: string[]
+  counters: { outcomes: number; predictionError: number; surprises: number }
+  modelFingerprint: string
+  lastLearningAt: number
+}
+
+export interface LearningActionToken { id: string; profileId: string; epoch: number; instanceId: string }
 
 export interface PersonalityService {
   current(): PersonalityProfile | null
@@ -128,6 +149,13 @@ export interface PersonalityService {
   topics(): Array<{ topic: string; score: number }>
   materials(): any[]
   status(): any
+  prepare(input: { query?: string; chat: Chat }): string
+  /** 宿主适配器专用，不得包装成模型可调用的打分工具。 */
+  beginAction(input: { action: string; chat: Chat; inputKey?: string }): LearningActionToken | null
+  endAction(token: LearningActionToken | null, outcome: { authority: 'execution' | 'validator'; success: boolean; receiptId: string; detail?: string; simulated?: boolean }): { ok: boolean; message?: string }
+  useSkill(id: string, query: string, chat: Chat): any
+  feedback(input: { episodeId: string; userId: string; helpful: boolean; correction?: string; receiptId: string }): any
+  restoreSkill(id: string, hash: string, revision: number): any
   invalidate(): void
 }
 

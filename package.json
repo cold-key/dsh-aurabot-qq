@@ -13,7 +13,8 @@
     "./package.json": "./package.json"
   },
   "scripts": {
-    "test": "node --test \"test/**/*.test.js\""
+    "test": "node --test \"test/**/*.test.js\"",
+    "eval:cognition": "node scripts/replay-cognition.mjs"
   },
   "dsh": {
     "bundle": {
@@ -47,6 +48,8 @@
     "docs/SOCIAL-LEARNING.md",
     "docs/PERSONALITY-EVOLUTION.md",
     "docs/PERSONALITY-EVOLUTION-PLAN.md",
+    "docs/CONTINUAL-LEARNING.md",
+    "scripts/replay-cognition.mjs",
     "LICENSE",
     "CHANGELOG.md"
   ],

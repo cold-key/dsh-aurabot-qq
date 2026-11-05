@@ -116,3 +116,19 @@ test('人格面板：重大提案审批和回滚均携带当前版本，模型�
   await find(tree, '模型预览（占今日额度，不应用）').props.onClick()
   assert.equal(JSON.parse(app.calls.find((r) => r.url.endsWith('/personality/reflect')).body).preview, true)
 })
+
+test('认知面板展示独立问题和真实结果，恢复技能携带版本与hash', async () => {
+  const profile = newProfile(YINGBAO, '10000001', Date.now())
+  profile.revision = 7
+  profile.mind.motives.push({ id: 'my-question', text: '我想了解观测误差', question: '如何区分信号和噪声', nextAction: '比较不同来源', targetSources: 3, progress: 1, status: 'active', visibility: 'public', revision: 1, reason: '真实浏览', evidence: [], history: [] })
+  profile.mind.experiments.push({ id: 'experiment', skillId: 'select-source', hash: 'verified-hash', accepted: true, baseline: 0.4, heldout: { score: 1 }, reason: '保留题通过', program: [{ op: 'take', count: 3 }] })
+  const status = { ok: true, seed: YINGBAO, config: { dailyMax: 1 }, quota: { count: 0 }, active: true, busy: false, newEvents: 0, profile, profiles: [], history: [], publicText: '萤宝' }
+  const app = harness((url) => url.endsWith('/personality/status') ? status : { ok: true })
+  const props = { draft: normalize({}), setDraft: () => {}, toast: () => {} }
+  app.render('Growth', props); await app.effects[0](); await new Promise((r) => setImmediate(r))
+  const tree = app.render('Growth', props)
+  assert.match(text(tree), /我想了解观测误差/); assert.match(text(tree), /材料进度 1\/3/)
+  assert.match(text(tree), /不代表总体智能/)
+  await find(tree, '恢复此技能版本').props.onClick()
+  assert.deepEqual(JSON.parse(app.calls.find((r) => r.url.endsWith('/personality/skill-rollback')).body), { revision: 7, id: 'select-source', hash: 'verified-hash' })
+})

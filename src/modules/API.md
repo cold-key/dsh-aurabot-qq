@@ -372,7 +372,11 @@ api.emit('experience/recorded', {
 
 核心已包装模块工具的实际返回值，B 站和抖音也已接入，扩展不要再次把同一来源转述为独立证据。聊天 `activity` 新增 `eventId/at/simulated`，另有 `kind: 'receipt'` 表示网关发送回执；`kind: 'out'` 保持原语义，不能仅凭它认定已成功发送。
 
-人格反思每日最多一次，失败、超时和模型预览也计入，和浏览提炼额度分开。小变化经程序限幅后自动生效，重大身份、使命、核心价值及关系类别变化待审阅。模块不会自主增加能力、发送次数、QQ资料权限或更改管理员。详见 [人格成长使用说明](../../docs/PERSONALITY-EVOLUTION.md)。
+人格反思每日最多一次，失败、超时和模型预览也计入，和浏览提炼额度分开。兼容性数值变化经程序限幅，重大身份、使命、核心价值及关系类别变化待审阅。开放的认知条目与可执行技能也共用该次反思；技能只能在宿主已有的解释器和任务契约内演化，不修改技术权限、发送次数、QQ资料权限或管理员。详见 [人格成长使用说明](../../docs/PERSONALITY-EVOLUTION.md) 和 [持续学习设计](../../docs/CONTINUAL-LEARNING.md)。
+
+`profile.mind` 包含 `models/motives/beliefs/strategies/skills/decisions/episodes/experiments`。不要直接写入这些对象。`prepare({query,chat})` 会持久记录策略选择并运行已验证技能，普通状态查看请用 `status()`。`useSkill(id,query,chat)` 只处理该会话可见的真实经历，返回带来源id的材料。
+
+宿主工具包装器使用 `beginAction({action,chat,inputKey?})` 与 `endAction(token,{authority,success,receiptId,detail})`；令牌绑定档案、代际和模块实例。模拟、未知结果和 `pending/queued` 不计分。此接口是可信适配器边界，**不得包装成模型可调用的自评分工具**。`feedback(...)` 只能由核实当前用户与真实消息id的输入适配器调用；不要把请求中的任意userId当作身份认证。
 
 ## 替换内置模块
 
