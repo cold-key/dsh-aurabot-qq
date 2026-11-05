@@ -88,7 +88,7 @@ test('串行处理两个平台，每轮一次调用，失败也扣共享预算�
   await f.service.waitForIdle()
   assert.equal(f.calls.length, 2)
   assert.equal(f.service.status().quota.count, 2)
-  assert.equal(f.calls[0].maxTokens, 1500); assert.equal(f.calls[0].maxAttempts, 1)
+  assert.equal(f.calls[0].maxTokens, 4000); assert.equal(f.calls[0].maxAttempts, 1)
   f.service.dispose()
   const again = fixture({ file: f.file, config: { dailyMax: 2 } })
   again.service.observe(batch('bili', [3])); await again.service.waitForIdle()
@@ -104,6 +104,22 @@ test('失败不重试且相同内容不自动重复请求，内容变化后可�
   f.service.observe(batch('bili', [1], { sections: [{ kind: 'subtitle', text: '内容发生了明显变化' }] })); await f.service.waitForIdle()
   assert.equal(f.calls.length, 2); assert.equal(f.service.status().quota.count, 2)
   assert.equal(f.service.list().length, 0)
+})
+
+test('输出预算给足：空回复记成「没有返回内容」而不是含糊的格式错误', async () => {
+  // 推理 token 和正文共用 maxTokens：预算太小时模型会返回空串，之前会被当成「格式不对」吞掉。
+  const f = fixture({ ask: async () => '' })
+  f.service.observe(batch()); await f.service.waitForIdle()
+  const status = f.service.status()
+  assert.equal(status.quota.count, 1)
+  assert.equal(f.service.list().length, 0)
+  const last = status.history[status.history.length - 1]
+  assert.equal(last.outcome, 'failed')
+  assert.match(last.message, /没有返回内容/)
+  const b = status.batches[0]
+  const preview = await f.service.preview(b.id)
+  assert.equal(preview.ok, false)
+  assert.match(preview.message, /没有返回内容/)
 })
 
 test('兼容、关闭、来源停用、试运行和总开关关闭不自动提炼', async () => {

@@ -153,8 +153,10 @@ export function createSocialLearning({ file, getConfig, ask, persona = () => '',
     let timedOut = false
     const physical = Promise.resolve().then(() => {
       signal.throwIfAborted()
+      // 输出预算是「思考 + 正文」共用的：1500 时常被推理吃光，正文变成空串或截断。
+      // 这里给到 4000，实测同一份材料能稳定产出 1.5～2k 字符合法 JSON。
       return ask({ system: SYSTEM + '\n角色设定（只用于判断感受，不允许修改）：\n' + clip(persona(), 3000),
-        text: JSON.stringify({ platform: batch.platform, items: batch.items }), maxTokens: 1500, temperature: 0.2, maxAttempts: 1, signal })
+        text: JSON.stringify({ platform: batch.platform, items: batch.items }), maxTokens: 4000, temperature: 0.2, maxAttempts: 1, signal })
     })
     try {
       const raw = await Promise.race([physical, new Promise((_, reject) => {
@@ -162,6 +164,11 @@ export function createSocialLearning({ file, getConfig, ask, persona = () => '',
         timer = setTimeout(() => { timedOut = true; controller?.abort(); reject(new Error(REASONS.timeout)) }, timeoutMs)
         timer.unref?.()
       })])
+      if (!String(raw ?? '').trim()) {
+        const empty = new Error('模型返回空内容（输出预算可能被推理占满）')
+        empty.emptyOutput = true
+        throw empty
+      }
       if (disposed || revision !== epoch || signal.aborted || gate(batch, isPreview)) {
         if (!disposed) rememberResult(batch, 'interrupted', REASONS.interrupted)
         job.resolve?.({ ok: false, reason: 'interrupted', message: REASONS.interrupted })
@@ -179,9 +186,14 @@ export function createSocialLearning({ file, getConfig, ask, persona = () => '',
     } catch (error) {
       const interrupted = disposed || revision !== epoch || signal.aborted && !timedOut
       const outcome = timedOut ? 'timeout' : interrupted ? 'interrupted' : 'failed'
-      if (!disposed) rememberResult(batch, outcome, timedOut ? REASONS.timeout : interrupted ? REASONS.interrupted : '提炼失败或输出不合格式，未应用结果')
-      job.resolve?.({ ok: false, reason: outcome, message: REASONS[outcome] || '提炼失败或输出不合格式' })
-      if (!interrupted) log.warn?.('浏览学习：', outcome)
+      const detail = timedOut ? REASONS.timeout
+        : interrupted ? REASONS.interrupted
+          : error?.emptyOutput ? '模型没有返回内容（输出预算可能被推理占满），未应用结果'
+            : '提炼失败或输出不合格式，未应用结果'
+      if (!disposed) rememberResult(batch, outcome, detail)
+      job.resolve?.({ ok: false, reason: outcome, message: REASONS[outcome] || detail })
+      // 失败原因要留痕：以前只记 outcome，面板里只剩一句「failed」，排查全靠猜。
+      if (!interrupted) log.warn?.('浏览学习：', outcome, clip(error?.message || '', 160))
     } finally {
       clearTimeout(timer)
       // 超时可先返回预览错误，但旧宿主若不支持取消，仍等物理请求退出再开下一枪。

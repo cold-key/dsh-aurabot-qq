@@ -120,7 +120,8 @@ export function createPersonality({ file, getConfig, ask, now = Date.now, log = 
       let timer, timeout = false
       const physical = Promise.resolve().then(() => {
         signal.throwIfAborted()
-        return ask({ system: SYSTEM + LEARNING_SYSTEM, text: JSON.stringify(input), maxTokens: 2000, temperature: 0.2, maxAttempts: 1, signal })
+        // 反思现在还要输出认知学习结果，输出预算跟思考共用；2000 容易被推理吃光导致空回复。
+        return ask({ system: SYSTEM + LEARNING_SYSTEM, text: JSON.stringify(input), maxTokens: 5000, temperature: 0.2, maxAttempts: 1, signal })
       })
       try {
         const raw = await Promise.race([physical, new Promise((_, reject) => {
@@ -128,6 +129,11 @@ export function createPersonality({ file, getConfig, ask, now = Date.now, log = 
           timer = setTimeout(() => { timeout = true; abort?.abort(); cancel?.({ ok: false, message: '反思超时，迟到结果不应用' }) }, timeoutMs)
           timer.unref?.()
         })])
+        if (!String(raw ?? '').trim()) {
+          const empty = new Error('模型返回空内容（输出预算可能被推理占满）')
+          empty.emptyOutput = true
+          throw empty
+        }
         if (revision !== epoch || gate() || current()?.id !== p.id || current()?.revision !== p.revision) {
           finish('interrupted', '人格版本已变化，结果丢弃')
           return { ok: false, message: '人格版本已变化，结果未应用' }
@@ -158,10 +164,13 @@ export function createPersonality({ file, getConfig, ask, now = Date.now, log = 
         })
         finish('reflected', result.message)
         return result
-      } catch {
+      } catch (error) {
         const interrupted = revision !== epoch || disposed || signal.aborted && !timeout
-        finish(timeout ? 'timeout' : interrupted ? 'interrupted' : 'failed', timeout ? '反思超时，迟到结果不应用' : interrupted ? '反思已中断' : '请求失败或输出不合格式，没有改变人格')
-        return { ok: false, message: timeout ? '反思超时' : interrupted ? '反思已中断' : '反思失败或输出不合格式' }
+        const empty = !timeout && !interrupted && Boolean(error?.emptyOutput)
+        finish(timeout ? 'timeout' : interrupted ? 'interrupted' : 'failed',
+          timeout ? '反思超时，迟到结果不应用' : interrupted ? '反思已中断' : empty ? '模型没有返回内容（输出预算可能被推理占满），没有改变人格' : '请求失败或输出不合格式，没有改变人格')
+        if (!interrupted) log.warn?.('人格反思：', timeout ? 'timeout' : 'failed', String(error?.message || '').slice(0, 160))
+        return { ok: false, message: timeout ? '反思超时' : interrupted ? '反思已中断' : empty ? '反思：模型没有返回内容' : '反思失败或输出不合格式' }
       } finally {
         clearTimeout(timer)
         await physical.catch(() => {})

@@ -79,7 +79,7 @@ test('7天回放：跨日证据才小步成长，每日和滚动7天上限由代
   const p = f.service.current()
   assert.ok(p.state.traits.curiosity > 0.5 && p.state.traits.curiosity <= 0.540001)
   assert.equal(f.calls.length, 7)
-  assert.equal(f.calls[0].maxAttempts, 1); assert.equal(f.calls[0].maxTokens, 2000)
+  assert.equal(f.calls[0].maxAttempts, 1); assert.equal(f.calls[0].maxTokens, 5000)
   assert.ok(f.calls.every((c) => c.text.length <= 16000))
   const value = p.state.traits.curiosity
   f.advance(30 * DAY); assert.equal(f.service.current().state.traits.curiosity, value)
